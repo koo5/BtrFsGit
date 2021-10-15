@@ -42,6 +42,7 @@ class Bfg:
 		SNAPSHOT_PARENT = os.path.split((SNAPSHOT))[0]
 		local_cmd(f'mkdir -p {SNAPSHOT_PARENT}')
 		local_cmd(f'btrfs subvolume snapshot -r {VOL} {SNAPSHOT}')
+		prerr(f'done, snapshotted {VOL} into {SNAPSHOT}')
 		return SNAPSHOT
 
 
@@ -70,25 +71,23 @@ class Bfg:
 			parents.append('-c')
 			parents.append(p)
 			
-		cmd = shlex.join(['sudo', 'btrfs', 'send'] + parents + [snapshot]) + '|' + s.sshstr + " sudo btrfs receive " + str(SNAPSHOT_PARENT)
-		prerr((cmd))
-																														   
+		cmd = shlex.join(['sudo', 'btrfs', 'send'] + parents + [snapshot]) + ' | ' + s.sshstr + " sudo btrfs receive " + str(SNAPSHOT_PARENT)
+		prerr((cmd) + ' ...')
 		subprocess.check_call(cmd, shell=True)
-		
-		s.remote_cmd_runner(['sudo', 'btrfs', 'receive', '-r', str(SNAPSHOT_PARENT)])
-		pass
+		prerr(f'done, pushed {snapshot} into {SNAPSHOT_PARENT}')
+		return remote_subvolume
 		
 
 	def find_common_parents(s, fs_root_mount_point='/', subvolume='/', remote_subvolume='/'):
 		
-		remote_subvols = get_ro_subvolumes(s.remote_cmd_runner, remote_subvolume)['by_received_uuid']
-		local_subvols = get_ro_subvolumes(local_cmd, subvolume)['by_local_uuid']
+		remote_subvols = get_ro_subvolumes(s.remote_cmd_runner, remote_subvolume)
+		local_subvols = get_ro_subvolumes(local_cmd, subvolume)
 		
-		print('remote_subvols:')
-		print(remote_subvols)
-		print('local_subvols:')
-		print(local_subvols)
-		print("common_parents:")
+		#print('remote_subvols:')
+		#print(remote_subvols)
+		#print('local_subvols:')
+		#print(local_subvols)
+		#print("common_parents:")
 		
 		common_parents = []
 		for k,v in local_subvols.items():
@@ -96,7 +95,7 @@ class Bfg:
 				abspath = fs_root_mount_point + '/' + local_cmd(['btrfs', 'ins', 'sub', v, subvolume]).strip()
 				common_parents.append(abspath)
 		
-		print(common_parents)
+		#print(common_parents)
 		return common_parents
 		
 		
@@ -154,7 +153,7 @@ def prerr(*a):
 
 
 def get_ro_subvolumes(command_runner, subvolume):
-	snapshots = {'by_received_uuid': {}, 'by_local_uuid': {}}
+	snapshots = {}
 	for line in command_runner(['sudo', 'btrfs', 'subvolume', 'list', '-t', '-r', '-R', '-u', subvolume]).splitlines()[2:]:
 		#prerr(line)
 		items = line.split()
@@ -162,9 +161,9 @@ def get_ro_subvolumes(command_runner, subvolume):
 		local_uuid = items[4]
 		subvol_id = items[0]
 		if received_uuid != '-':
-			snapshots['by_received_uuid'][received_uuid] = subvol_id
+			snapshots[received_uuid] = subvol_id
 		if local_uuid != '-':
-			snapshots['by_local_uuid'][local_uuid] = subvol_id
+			snapshots[local_uuid] = subvol_id
 	return snapshots
 
 
