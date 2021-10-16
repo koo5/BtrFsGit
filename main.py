@@ -20,6 +20,15 @@ class Bfg:
 		s._sshstr = sshstr
 
 
+	def commit_and_push_and_checkout(s, fs_root_mount_point=None, subvolume='/', remote_subvolume='/bfg'):
+		remote_snapshot_path = s.commit_and_push(fs_root_mount_point, subvolume, remote_subvolume, parents)
+		s.checkout_remote(remote_snapshot_path, remote_subvolume)
+
+	
+	def commit_and_generate_patch(s):
+		pass
+		
+
 	def commit_and_push(s, fs_root_mount_point=None, subvolume='/', remote_subvolume='/bfg', parents:List[str]=None):
 		if fs_root_mount_point is None:
 			fs_root_mount_point = subvolume
@@ -27,15 +36,21 @@ class Bfg:
 		s.push(fs_root_mount_point, subvolume, snapshot, remote_subvolume, parents)
 		
 
-	def checkout(s, SNAPSHOT, SUBVOLUME):
+	def checkout_local(s, SNAPSHOT, SUBVOLUME):
 		"""stash your SUBVOLUME, and replace it with SNAPSHOT"""
-		local_stash(SUBVOLUME)
+		stash_local(SUBVOLUME)
 		_local_cmd(f'btrfs subvolume snapshot {SNAPSHOT} {SUBVOLUME}')
 		prerr(f'done, checked out {SNAPSHOT} into {SUBVOLUME}')
 		return SUBVOLUME
 
 
-	def stash(s, SUBVOLUME):
+	def checkout_remote(s, SNAPSHOT, SUBVOLUME):
+		"""ssh into the other machine,
+		stash your SUBVOLUME, and replace it with SNAPSHOT"""
+		raise 'todo'
+		
+
+	def stash_local(s, SUBVOLUME):
 		"""snapshot and delete your SUBVOLUME"""
 		snapshot = s.local_make_ro_snapshot(SUBVOLUME, s.calculate_snapshot_path(SUBVOLUME, 'stash'))
 		_local_cmd(f'btrfs subvolume delete {SUBVOLUME}')
@@ -52,20 +67,16 @@ class Bfg:
 		return SNAPSHOT
 
 
-
 	def commit(s, VOL='/', SNAPSHOTS_CONTAINER=None, TAG=None, SNAPSHOT=None):
 		"""
 		come up with a filesystem path for a snapshot, and snapshot VOL.
 		"""
 		VOL = Path(VOL).absolute()
-
 		if SNAPSHOT is not None:
 			SNAPSHOT = Path(SNAPSHOT).absolute()
 		else:
 			SNAPSHOT = s.calculate_snapshot_path(VOL, TAG)
-
 		s.local_make_ro_snapshot(VOL, SNAPSHOT)
-
 		return (SNAPSHOT)
 
 				
@@ -84,16 +95,28 @@ class Bfg:
 			for p in s.find_common_parents(fs_root_mount_point, subvolume, str(SNAPSHOT_PARENT)):
 				parents.append(p)
 
+		parents = s._filter_out_wrong_parents(parents)	
+
 		parents_args = []
 		for p in parents:
 			parents_args.append('-c')
 			parents_args.append(p)
 
-		cmd = shlex.join(['sudo', 'btrfs', 'send'] + parents_args + [snapshot]) + ' | ' + s.sshstr + " sudo btrfs receive " + str(SNAPSHOT_PARENT)
+		cmd = shlex.join(['sudo', 'btrfs', 'send'] + parents_args + [snapshot]) + ' | ' + s._sshstr + " sudo btrfs receive " + str(SNAPSHOT_PARENT)
 		_prerr((cmd) + ' ...')
 		subprocess.check_call(cmd, shell=True)
 		_prerr(f'done, pushed {snapshot} into {SNAPSHOT_PARENT}')
 		return remote_subvolume
+
+
+	def _filter_out_wrong_parents(s, parents):
+		parents2 = parents[:]
+		for p in parents:
+			stderr = subprocess.run(['sudo', 'btrfs', 'send', snapshot], stderr=subprocess.PIPE).communicate()[1]
+			print(stderr)
+			if 'parent determination failed' in stderr:
+				parents2.remove(p)
+		return parents2
 		
 
 	def find_common_parents(s, fs_root_mount_point='/', subvolume='/', remote_subvolume='/'):
@@ -117,18 +140,9 @@ class Bfg:
 		return common_parents
 		
 		
-
-	def commit_and_push_and_checkout(s, subvolume='/', remote_subvolume='/'):
-		pass
-
-	
-	def commit_and_generate_patch(s):
-		pass
-		
-			
 	def _remote_cmd_runner(s, cmd):
-		if s.sshstr != '':
-			ssh = shlex.split(s.sshstr)
+		if s._sshstr != '':
+			ssh = shlex.split(s._sshstr)
 			cmd2 = ssh + cmd
 			_prerr(cmd2)
 			return subprocess.check_output(cmd2, text=True)
