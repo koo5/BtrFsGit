@@ -20,9 +20,17 @@ class Bfg:
 		s._sshstr = sshstr
 
 
-	def commit_and_push_and_checkout(s, fs_root_mount_point=None, subvolume='/', remote_subvolume='/bfg'):
-		remote_snapshot_path = s.commit_and_push(fs_root_mount_point, subvolume, remote_subvolume, parents)
-		s.checkout_remote(remote_snapshot_path, remote_subvolume)
+	def commit_and_push_and_checkout(s, FS_ROOT_MOUNT_POINT=None, SUBVOLUME='/', REMOTE_SUBVOLUME='/bfg'):
+		"""
+		Commit, push the snapshot to the other machine, and checkout it there
+
+		:param FS_ROOT_MOUNT_POINT: mount point of SUBVOLUME filesystem
+		:param SUBVOLUME: your data
+		:param REMOTE_SUBVOLUME: desired filesystem path of your data on the other machine
+		:return: filesystem path of the snapshot created on the other machine
+		"""
+		remote_snapshot_path = s.commit_and_push(FS_ROOT_MOUNT_POINT, SUBVOLUME, REMOTE_SUBVOLUME, parents)
+		s.checkout_remote(remote_snapshot_path, REMOTE_SUBVOLUME)
 
 	
 	def commit_and_generate_patch(s):
@@ -122,7 +130,7 @@ class Bfg:
 	def find_common_parents(s, fs_root_mount_point='/', subvolume='/', remote_subvolume='/'):
 		
 		remote_subvols = _get_ro_subvolumes(s._remote_cmd_runner, remote_subvolume)
-		local_subvols = _get_ro_subvolumes(local_cmd, subvolume)
+		local_subvols = _get_ro_subvolumes(_local_cmd, subvolume)
 		
 		#print('remote_subvols:')
 		#print(remote_subvols)

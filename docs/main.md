@@ -32,8 +32,13 @@ Classes
     `commit_and_push(s, fs_root_mount_point=None, subvolume='/', remote_subvolume='/bfg', parents: List[str] = None)`
     :
 
-    `commit_and_push_and_checkout(s, fs_root_mount_point=None, subvolume='/', remote_subvolume='/bfg')`
-    :
+    `commit_and_push_and_checkout(s, FS_ROOT_MOUNT_POINT=None, SUBVOLUME='/', REMOTE_SUBVOLUME='/bfg')`
+    :   Commit, push the snapshot to the other machine, and checkout it there
+        
+        :param FS_ROOT_MOUNT_POINT: mount point of SUBVOLUME filesystem
+        :param SUBVOLUME: your data
+        :param REMOTE_SUBVOLUME: desired filesystem path of your data on the other machine
+        :return: filesystem path of the snapshot created on the other machine
 
     `find_common_parents(s, fs_root_mount_point='/', subvolume='/', remote_subvolume='/')`
     :

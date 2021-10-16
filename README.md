@@ -6,7 +6,7 @@ B-tree Filesystem Git attempts to enable git-like workflow for subvolumes. Commi
 todo
 
 ## available commands
-[docs/]
+[docs/]()
 
 ## prerequisites
 
