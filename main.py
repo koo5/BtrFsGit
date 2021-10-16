@@ -22,7 +22,7 @@ class Bfg:
 
 	def commit_and_push_and_checkout(s, FS_ROOT_MOUNT_POINT=None, SUBVOLUME='/', REMOTE_SUBVOLUME='/bfg'):
 		"""
-		Commit, push the snapshot to the other machine, and checkout it there
+		Snapshot your data, "btrfs send"/"btrfs receive" the snapshot to the other machine, and checkout it there
 
 		:param FS_ROOT_MOUNT_POINT: mount point of SUBVOLUME filesystem
 		:param SUBVOLUME: your data
@@ -33,15 +33,25 @@ class Bfg:
 		s.checkout_remote(remote_snapshot_path, REMOTE_SUBVOLUME)
 
 	
-	def commit_and_generate_patch(s):
-		pass
+	def commit_and_generate_patch(s, SUBVOLUME='/', PATCH_FILE_DIR, PARENTS:List[str]=None):
+		"""
+
+		:param SUBVOLUME:
+		:param PATCH_FILE_DIR:
+		:param PARENTS:
+		:return:
+		"""
+		snapshot = s.commit(SUBVOLUME)
+		s._send(snapshot, ' > ' + PATCH_FILE_DIR + '/' + '__'.join(Path(snapshot).parts[:-2]), PARENTS)
+		_prerr(f'done, pushed {SNAPSHOT} into {snapshot_parent}')
+		return REMOTE_SUBVOLUME
+
+
 		
 
-	def commit_and_push(s, fs_root_mount_point=None, subvolume='/', remote_subvolume='/bfg', parents:List[str]=None):
-		if fs_root_mount_point is None:
-			fs_root_mount_point = subvolume
-		snapshot = s.commit(subvolume)
-		s.push(fs_root_mount_point, subvolume, snapshot, remote_subvolume, parents)
+	def commit_and_push(s, FS_ROOT_MOUNT_POINT=None, SUBVOLUME='/', REMOTE_SUBVOLUME='/bfg', PARENTS:List[str]=None):
+		snapshot = s.commit(SUBVOLUME)
+		s.push(FS_ROOT_MOUNT_POINT, SUBVOLUME, snapshot, REMOTE_SUBVOLUME, PARENTS)
 		
 
 	def checkout_local(s, SNAPSHOT, SUBVOLUME):
@@ -88,33 +98,39 @@ class Bfg:
 		return (SNAPSHOT)
 
 				
-	def push(s, fs_root_mount_point, subvolume, snapshot, remote_subvolume, parents=None):
+	def push(s, FS_ROOT_MOUNT_POINT, SUBVOLUME, SNAPSHOT, REMOTE_SUBVOLUME, PARENTS=None):
 		"""
 		
 		try to figure out shared parents, if not provided.
 		subvolume is probably not needed and fs_root_mount_point can be used?
 		
 		"""
-		SNAPSHOT_PARENT = s.calculate_snapshot_parent_dir(Path(remote_subvolume))
-		s._remote_cmd_runner(['sudo', 'mkdir', '-p', str(SNAPSHOT_PARENT)])
+		if FS_ROOT_MOUNT_POINT is None:
+			FS_ROOT_MOUNT_POINT = SUBVOLUME
+		snapshot_parent = s.calculate_snapshot_parent_dir(Path(REMOTE_SUBVOLUME))
+		s._remote_cmd_runner(['sudo', 'mkdir', '-p', str(snapshot_parent)])
 
-		if parents is None:
-			parents = []
-			for p in s.find_common_parents(fs_root_mount_point, subvolume, str(SNAPSHOT_PARENT)):
-				parents.append(p)
+		if PARENTS is None:
+			PARENTS = []
+			for p in s.find_common_parents(FS_ROOT_MOUNT_POINT, SUBVOLUME, str(snapshot_parent)):
+				PARENTS.append(p)
 
-		parents = s._filter_out_wrong_parents(snapshot, parents)	
+		PARENTS = s._filter_out_wrong_parents(SNAPSHOT, PARENTS)
 
+		s._send(SNAPSHOT, ' | ' + s._sshstr + " sudo btrfs receive " + str(snapshot_parent), PARENTS)
+		_prerr(f'done, pushed {SNAPSHOT} into {snapshot_parent}')
+		return REMOTE_SUBVOLUME
+
+
+	def _send(s, SNAPSHOT, target, PARENTS):
 		parents_args = []
-		for p in parents:
+		for p in PARENTS:
 			parents_args.append('-c')
 			parents_args.append(p)
 
-		cmd = shlex.join(['sudo', 'btrfs', 'send'] + parents_args + [snapshot]) + ' | ' + s._sshstr + " sudo btrfs receive " + str(SNAPSHOT_PARENT)
+		cmd = shlex.join(['sudo', 'btrfs', 'send'] + parents_args + [SNAPSHOT]) + target
 		_prerr((cmd) + ' ...')
 		subprocess.check_call(cmd, shell=True)
-		_prerr(f'done, pushed {snapshot} into {SNAPSHOT_PARENT}')
-		return remote_subvolume
 
 
 	def _filter_out_wrong_parents(s, snapshot, parents):
