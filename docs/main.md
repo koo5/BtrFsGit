@@ -26,14 +26,17 @@ Classes
     `commit(s, VOL='/', SNAPSHOTS_CONTAINER=None, TAG=None, SNAPSHOT=None)`
     :   come up with a filesystem path for a snapshot, and snapshot VOL.
 
-    `commit_and_generate_patch(s)`
+    `commit_and_generate_patch(s, SUBVOLUME='/', PATCH_FILE_DIR='/', PARENTS: List[str] = None)`
+    :   :param SUBVOLUME:
+        :param PATCH_FILE_DIR:
+        :param PARENTS:
+        :return:
+
+    `commit_and_push(s, FS_ROOT_MOUNT_POINT=None, SUBVOLUME='/', REMOTE_SUBVOLUME='/bfg', PARENTS: List[str] = None)`
     :
 
-    `commit_and_push(s, fs_root_mount_point=None, subvolume='/', remote_subvolume='/bfg', parents: List[str] = None)`
-    :
-
-    `commit_and_push_and_checkout(s, FS_ROOT_MOUNT_POINT=None, SUBVOLUME='/', REMOTE_SUBVOLUME='/bfg')`
-    :   Commit, push the snapshot to the other machine, and checkout it there
+    `commit_and_push_and_checkout(s, FS_ROOT_MOUNT_POINT=None, SUBVOLUME='/', REMOTE_SUBVOLUME='/bfg', PARENTS: List[str] = None)`
+    :   Snapshot your data, "btrfs send"/"btrfs receive" the snapshot to the other machine, and checkout it there
         
         :param FS_ROOT_MOUNT_POINT: mount point of SUBVOLUME filesystem
         :param SUBVOLUME: your data
@@ -46,9 +49,15 @@ Classes
     `local_make_ro_snapshot(s, VOL, SNAPSHOT)`
     :   make a read-only snapshot of VOL into SNAPSHOT, locally
 
-    `push(s, fs_root_mount_point, subvolume, snapshot, remote_subvolume, parents=None)`
+    `push(s, FS_ROOT_MOUNT_POINT, SUBVOLUME, SNAPSHOT, REMOTE_SUBVOLUME, PARENTS=None)`
     :   try to figure out shared parents, if not provided.
         subvolume is probably not needed and fs_root_mount_point can be used?
 
+    `remote_make_ro_snapshot(s, VOL, SNAPSHOT)`
+    :   make a read-only snapshot of VOL into SNAPSHOT, remotely
+
     `stash_local(s, SUBVOLUME)`
+    :   snapshot and delete your SUBVOLUME
+
+    `stash_remote(s, SUBVOLUME)`
     :   snapshot and delete your SUBVOLUME
