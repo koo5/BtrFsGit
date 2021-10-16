@@ -9,6 +9,7 @@ import time
 import subprocess
 import fire
 import shlex
+from typing import List
 
 
 
@@ -21,11 +22,11 @@ class Bfg:
 		s.sshstr = sshstr
 
 
-	def commit_and_push(s, fs_root_mount_point=None, subvolume='/', remote_subvolume='/bfg'):
+	def commit_and_push(s, fs_root_mount_point=None, subvolume='/', remote_subvolume='/bfg', parents:List[str]=None):
 		if fs_root_mount_point is None:
 			fs_root_mount_point = subvolume
 		snapshot = s.commit(subvolume)
-		s.push(fs_root_mount_point, subvolume, snapshot, remote_subvolume)
+		s.push(fs_root_mount_point, subvolume, snapshot, remote_subvolume, parents)
 		
 	def checkout(s, what, where):
 		local_stash(where)
@@ -62,16 +63,21 @@ class Bfg:
 
 		
 		
-	def push(s, fs_root_mount_point, subvolume, snapshot, remote_subvolume):
+	def push(s, fs_root_mount_point, subvolume, snapshot, remote_subvolume, parents=None):
 		SNAPSHOT_PARENT = snapshot_parent_dir(Path(remote_subvolume))
 		s.remote_cmd_runner(['sudo', 'mkdir', '-p', str(SNAPSHOT_PARENT)])
 
-		parents = []
-		for p in s.find_common_parents(fs_root_mount_point, subvolume, str(SNAPSHOT_PARENT)):
-			parents.append('-c')
-			parents.append(p)
-			
-		cmd = shlex.join(['sudo', 'btrfs', 'send'] + parents + [snapshot]) + ' | ' + s.sshstr + " sudo btrfs receive " + str(SNAPSHOT_PARENT)
+		if parents is None:
+			parents = []
+			for p in s.find_common_parents(fs_root_mount_point, subvolume, str(SNAPSHOT_PARENT)):
+				parents.append(p)
+
+		parents_args = []
+		for p in parents:
+			parents_args.append('-c')
+			parents_args.append(p)
+
+		cmd = shlex.join(['sudo', 'btrfs', 'send'] + parents_args + [snapshot]) + ' | ' + s.sshstr + " sudo btrfs receive " + str(SNAPSHOT_PARENT)
 		prerr((cmd) + ' ...')
 		subprocess.check_call(cmd, shell=True)
 		prerr(f'done, pushed {snapshot} into {SNAPSHOT_PARENT}')
