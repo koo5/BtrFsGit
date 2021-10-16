@@ -103,7 +103,7 @@ class Bfg:
 			for p in s.find_common_parents(fs_root_mount_point, subvolume, str(SNAPSHOT_PARENT)):
 				parents.append(p)
 
-		parents = s._filter_out_wrong_parents(parents)	
+		parents = s._filter_out_wrong_parents(snapshot, parents)	
 
 		parents_args = []
 		for p in parents:
@@ -117,13 +117,17 @@ class Bfg:
 		return remote_subvolume
 
 
-	def _filter_out_wrong_parents(s, parents):
+	def _filter_out_wrong_parents(s, snapshot, parents):
+		"""filter out parents that aren't usable for snapshot"""
 		parents2 = parents[:]
 		for p in parents:
-			stderr = subprocess.run(['sudo', 'btrfs', 'send', snapshot], stderr=subprocess.PIPE).communicate()[1]
-			print(stderr)
+			stderr = subprocess.Popen(['sudo', 'btrfs', 'send', snapshot], stderr=subprocess.PIPE, text=True).communicate()[1]
+			#print(stderr.strip())
 			if 'parent determination failed' in stderr:
 				parents2.remove(p)
+			else:
+				#print("^^^ this means that the parent is usable")
+				pass
 		return parents2
 		
 
