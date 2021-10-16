@@ -33,7 +33,7 @@ class Bfg:
 		s.checkout_remote(remote_snapshot_path, REMOTE_SUBVOLUME)
 
 	
-	def commit_and_generate_patch(s, SUBVOLUME='/', PATCH_FILE_DIR, PARENTS:List[str]=None):
+	def commit_and_generate_patch(s, SUBVOLUME='/', PATCH_FILE_DIR='/', PARENTS:List[str]=None):
 		"""
 
 		:param SUBVOLUME:
@@ -136,16 +136,52 @@ class Bfg:
 	def _filter_out_wrong_parents(s, snapshot, parents):
 		"""filter out parents that aren't usable for snapshot"""
 		parents2 = parents[:]
+		counter = 0
 		for p in parents:
-			stderr = subprocess.Popen(['sudo', 'btrfs', 'send', snapshot], stderr=subprocess.PIPE, text=True).communicate()[1]
-			#print(stderr.strip())
-			if 'parent determination failed' in stderr:
+			#stderr = subprocess.Popen(['sudo', 'btrfs', 'send', '-c', p, snapshot], stderr=subprocess.PIPE, text=True).communicate()[1]
+			proc = subprocess.Popen(['sudo', 'btrfs', 'send', '-c', p, snapshot], stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+			#print(proc)
+
+			if s._read_first_bytes(proc.stdout) != 0:
+				proc.kill()
+				continue
+			
+			stderr = b''
+			while True:
+				r = proc.stderr.read(100000)
+				stderr += r
+				if len(r) == 0:
+					break
+					
+			proc.kill()
+			
+			#print(str(stderr))
+			#print('ok..')
+
+			if b'\nERROR: parent determination failed for ' in stderr:
 				parents2.remove(p)
+				counter += 1
 			else:
-				#print("^^^ this means that the parent is usable")
-				pass
+				print(stderr)
+
+		
+		_prerr(f'filetered out {counter} unsuitable parents')
 		return parents2
 		
+		
+	def _read_first_bytes(s, stdout):
+		result = b''
+		while True:
+			o = stdout.read(10)
+			result += o
+			if len(o) == 0:
+				break
+			if len(result) > 10:
+				break
+		return len(result)
+		
+
+
 
 	def find_common_parents(s, fs_root_mount_point='/', subvolume='/', remote_subvolume='/'):
 		
