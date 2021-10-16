@@ -42,9 +42,12 @@ class Bfg:
 		:return:
 		"""
 		snapshot = s.commit(SUBVOLUME)
-		s._send(snapshot, ' > ' + PATCH_FILE_DIR + '/' + '__'.join(Path(snapshot).parts[:-2]), PARENTS)
-		_prerr(f'done, pushed {SNAPSHOT} into {snapshot_parent}')
-		return REMOTE_SUBVOLUME
+		#print(Path(snapshot).parts[-2:])
+		fn = PATCH_FILE_DIR + '/' + '__'.join(Path(snapshot).parts[-2:])
+		#print(fn)
+		s._send(snapshot, ' > ' + fn, PARENTS)
+		_prerr(f'done, generated patch from {snapshot} into {fn}')
+		return fn
 
 
 		
