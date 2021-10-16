@@ -3,10 +3,10 @@ Work in progress.
 B-tree Filesystem Git attempts to enable git-like workflow for subvolumes. Commit, push, checkout, stash, pull..
 
 ## example workflow
-
-
+todo
 
 ## available commands
+[docs/]
 
 ## prerequisites
 
