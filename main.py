@@ -154,6 +154,12 @@ def prerr(*a):
 
 def get_ro_subvolumes(command_runner, subvolume):
 	snapshots = {}
+	
+	# todo: limit this to snapshots of the subvolume we want to send, at least on the sending side, otherwise, we are giving 'btrfs send' -c's that are unrelated to the given subvolume
+	
+	# also, what if a snapshot is snapshotted again (two hops), does it retain received-uuid?	
+	
+	
 	for line in command_runner(['sudo', 'btrfs', 'subvolume', 'list', '-t', '-r', '-R', '-u', subvolume]).splitlines()[2:]:
 		#prerr(line)
 		items = line.split()
