@@ -168,8 +168,9 @@ class Bfg:
 		parents2 = parents[:]
 		counter = 0
 		for p in parents:
-			proc = subprocess.Popen(s._sudo + ['btrfs', 'send', '-c', p, snapshot], stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-			#print(proc)
+			cmd = s._sudo + ['btrfs', 'send', '-c', p, snapshot]
+			print(shlex.join(cmd) + ' ...')
+			proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
 
 			if s._read_first_bytes(proc.stdout) != 0:
 				proc.kill()
@@ -184,8 +185,8 @@ class Bfg:
 					
 			proc.kill()
 			
-			#print(str(stderr))
-			#print('ok..')
+			print(str(stderr))
+			print('ok..')
 
 			if b'\nERROR: parent determination failed for ' in stderr:
 				parents2.remove(p)
@@ -194,7 +195,7 @@ class Bfg:
 				print(stderr)
 
 		
-		_prerr(f'filetered out {counter} unsuitable parents')
+		_prerr(f'filtered out {counter} unsuitable parents')
 		return parents2
 		
 		
