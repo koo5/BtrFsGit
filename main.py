@@ -99,33 +99,33 @@ class Bfg:
 			return snapshot
 		
 
-	def local_make_ro_snapshot(s, VOL, SNAPSHOT):
-		"""make a read-only snapshot of VOL into SNAPSHOT, locally"""
+	def local_make_ro_snapshot(s, SUBVOLUME, SNAPSHOT):
+		"""make a read-only snapshot of SUBVOLUME into SNAPSHOT, locally"""
 		SNAPSHOT_PARENT = os.path.split((SNAPSHOT))[0]
 		s._local_cmd(f'mkdir -p {SNAPSHOT_PARENT}')
-		s._local_cmd(f'btrfs subvolume snapshot -r {VOL} {SNAPSHOT}')
-		_prerr(f'DONE {s._local_str}, snapshotted {VOL} into {SNAPSHOT}')
+		s._local_cmd(f'btrfs subvolume snapshot -r {SUBVOLUME} {SNAPSHOT}')
+		_prerr(f'DONE {s._local_str}, snapshotted {SUBVOLUME} into {SNAPSHOT}')
 		return SNAPSHOT
 
-	def remote_make_ro_snapshot(s, VOL, SNAPSHOT):
-		"""make a read-only snapshot of VOL into SNAPSHOT, remotely"""
+	def remote_make_ro_snapshot(s, SUBVOLUME, SNAPSHOT):
+		"""make a read-only snapshot of SUBVOLUME into SNAPSHOT, remotely"""
 		SNAPSHOT_PARENT = os.path.split((SNAPSHOT))[0]
 		s._remote_cmd(f'mkdir -p {SNAPSHOT_PARENT}')
-		s._remote_cmd(f'btrfs subvolume snapshot -r {VOL} {SNAPSHOT}')
-		_prerr(f'DONE {s._remote_str}, snapshotted {VOL} into {SNAPSHOT}')
+		s._remote_cmd(f'btrfs subvolume snapshot -r {SUBVOLUME} {SNAPSHOT}')
+		_prerr(f'DONE {s._remote_str}, snapshotted {SUBVOLUME} into {SNAPSHOT}')
 		return SNAPSHOT
 
 
-	def commit(s, VOL='/', SNAPSHOTS_CONTAINER=None, TAG=None, SNAPSHOT=None):
+	def commit(s, SUBVOLUME='/', SNAPSHOTS_CONTAINER=None, TAG=None, SNAPSHOT=None):
 		"""
-		come up with a filesystem path for a snapshot, and snapshot VOL.
+		come up with a filesystem path for a snapshot, and snapshot SUBVOLUME.
 		"""
-		VOL = Path(VOL).absolute()
+		SUBVOLUME = Path(SUBVOLUME).absolute()
 		if SNAPSHOT is not None:
 			SNAPSHOT = Path(SNAPSHOT).absolute()
 		else:
-			SNAPSHOT = s.calculate_snapshot_path(VOL, TAG)
-		s.local_make_ro_snapshot(VOL, SNAPSHOT)
+			SNAPSHOT = s.calculate_snapshot_path(SUBVOLUME, TAG)
+		s.local_make_ro_snapshot(SUBVOLUME, SNAPSHOT)
 		return (SNAPSHOT)
 
 				
@@ -265,19 +265,19 @@ class Bfg:
 				return -1
 
  
-	def calculate_snapshot_parent_dir(s, VOL):
+	def calculate_snapshot_parent_dir(s, SUBVOLUME):
 		"""
-		VOL: your subvolume (for example /data).
+		SUBVOLUME: your subvolume (for example /data).
 		Calculate the default snapshot parent dir. In the filesystem tree, it is on the same level as your subvolume, for example /.bfg_snapshots.data.
 		"""
-		return Path(str(VOL.parent) + '/.bfg_snapshots.' + VOL.parts[-1]).absolute()
+		return Path(str(SUBVOLUME.parent) + '/.bfg_snapshots.' + SUBVOLUME.parts[-1]).absolute()
 
 
-	def calculate_snapshot_path(s, VOL, TAG):
+	def calculate_snapshot_path(s, SUBVOLUME, TAG):
 		"""
 		calculate the filesystem path where a snapshot should go, given a subvolume and a tag
 		"""
-		parent = s.calculate_snapshot_parent_dir(VOL)
+		parent = s.calculate_snapshot_parent_dir(SUBVOLUME)
 		
 		tss = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
 		#tss = subprocess.check_output(['date', '-u', "+%Y-%m-%d_%H-%M-%S"], text=True).strip()
