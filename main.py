@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.8
 
 
 
@@ -10,6 +10,7 @@ import subprocess
 import fire
 import shlex
 from typing import List
+from operator import itemgetter
 
 
 
@@ -144,8 +145,9 @@ class Bfg:
 		if PARENTS is None:
 			PARENTS = []
 			for p in s.find_common_parents(FS_ROOT_MOUNT_POINT, SUBVOLUME, str(snapshot_parent)):
-				PARENTS.append(p)
-		PARENTS = s._filter_out_wrong_parents(SNAPSHOT, PARENTS)
+				#PARENTS.append(p)
+				PARENTS = [p] # this should give us the last one / highest ID
+		#PARENTS = s._filter_out_wrong_parents(SNAPSHOT, PARENTS)
 
 		s._send(SNAPSHOT, ' | ' + s._sshstr + ' ' + s._sudo[0] + " btrfs receive " + str(snapshot_parent), PARENTS)
 		_prerr(f'DONE, pushed {SNAPSHOT} into {snapshot_parent}')
@@ -155,8 +157,10 @@ class Bfg:
 	def _send(s, SNAPSHOT, target, PARENTS):
 		parents_args = []
 		for p in PARENTS:
-			parents_args.append('-c')
+			parents_args.append('-p')
 			parents_args.append(p)
+
+		# todo we might want to allow some -c's too, for example, the current snapshot contains a large file reflinked from another subvol. This actually happens quite a bit when reorganizing stuff.
 
 		cmd = shlex.join(s._sudo + ['btrfs', 'send'] + parents_args + [SNAPSHOT]) + target
 		_prerr((cmd) + ' ...')
@@ -211,29 +215,11 @@ class Bfg:
 		return len(result)
 		
 
+	def get_subvol_uuid_by_path(s, runner, path):
+		out = runner(f'btrfs sub show {path}')
+		return (out.splitlines()[2].split()[1])
 
 
-	def find_common_parents(s, fs_root_mount_point='/', subvolume='/', remote_subvolume='/'):
-		
-		remote_subvols = _get_ro_subvolumes(s._remote_cmd, remote_subvolume)
-		local_subvols = _get_ro_subvolumes(s._local_cmd, subvolume)
-		
-		#print('remote_subvols:')
-		#print(remote_subvols)
-		#print('local_subvols:')
-		#print(local_subvols)
-		#print("common_parents:")
-		
-		common_parents = []
-		for k,v in local_subvols.items():
-			if k in remote_subvols:
-				abspath = fs_root_mount_point + '/' + s._local_cmd(['btrfs', 'ins', 'sub', v, subvolume]).strip()
-				common_parents.append(abspath)
-		
-		#print(common_parents)
-		return common_parents
-		
-		
 	def _remote_cmd(s, cmd, die_on_error=True):
 		if not isinstance(cmd, list):
 			cmd = shlex.split(cmd)
@@ -289,31 +275,141 @@ class Bfg:
 		return str(Path(str(parent) + '/' + ts + '_' + TAG))
 
 
-def _prerr(*a):
-	print(*a, file = sys.stderr)
- 
+
+	def find_common_parents(s, fs_root_mount_point='/', subvolume='/', remote_subvolume='/'):
+
+		# can also happen to be just a parse of a btrfs sub list dump, doesn't matter
+		remote_subvols = _get_subvolumes(s._remote_cmd, remote_subvolume)
+		good_locals = yyy(remote_subvols, subvolume)
+		sort(good_locals, lambda sv: -sv['subvol_id'])
+		for l in good_locals:
+			for sv in remote_subvols:
+				if
+
+		common_parents = []
+		for k,v in local_subvols.items():
+			if k in remote_subvols:
+				abspath = fs_root_mount_point + '/' + s._local_cmd(['btrfs', 'ins', 'sub', v, subvolume]).strip()
+				common_parents.append((v,abspath))
+		# sort by id
 
 
-def _get_ro_subvolumes(command_runner, subvolume):
-	snapshots = {}
-	
-	# todo: limit this to snapshots of the subvolume we want to send, at least on the sending side, otherwise, we are giving 'btrfs send' -c's that are unrelated to the given subvolume
-	
-	# also, what if a snapshot is snapshotted again (two hops), does it retain received-uuid?	
-	
-	
-	for line in command_runner(['btrfs', 'subvolume', 'list', '-t', '-r', '-R', '-u', subvolume]).splitlines()[2:]:
-		#_prerr(line)
-		items = line.split()
-		received_uuid = items[3]
-		local_uuid = items[4]
-		subvol_id = items[0]
-		if received_uuid != '-':
-			snapshots[received_uuid] = subvol_id
-		if local_uuid != '-':
-			snapshots[local_uuid] = subvol_id
+		#print(common_parents)
+		return common_parents
+
+
+def yyy(remote_subvols, subvolume):
+	good = []
+	for sv in xxx(remote_subvols,  subvolume):
+		if sv['machine'] == 'local':
+			good.append(sv)
+	return good
+
+
+def xxx(remote_subvols, subvolume):
+	my_uuid = s.get_subvol_uuid_by_path(s._local_cmd, subvolume)
+	local_subvols = _get_subvolumes(s._local_cmd, subvolume)
+	other_subvols = load_subvol_dumps()
+	subvols = {}
+	for machine,lst in {
+		'remote':remote_subvols,
+		'local':local_subvols,
+		'other':other_subvols
+	}.items():
+		for k,v in lst.items():
+			v['machine'] = machine
+			subvols[k] = v
+
+	yield from xxxyyy(subvolumes, my_uuid)
+
+
+def xxxyyy(subvolumes, my_uuid):
+	while True:
+		found = False
+		for sv in subvolumes:
+			if my_uuid in sv['uuids']:
+				yield from ro_descendants_chain(subvolumes, my_uuid)
+
+				todo see if a node in the chain is on the remote machine. if not, the chain is useless
+				if yes, any node that's on the local machine should be good?
+
+				if 'parent_uuid' in sv:
+					yield from xxxyyy(subvolumes, sv['uuid'])
+
+
+def ro_descendants_chain(subvolumes, my_uuid):
+	"""
+
+todo yield the whole chain here, but a descendant is a descendant if:
+it's the subvol
+its received_uuid is the uuid
+iss parent_uuid is the uuid
+
+	:param subvolumes:
+	:param my_uuid:
+	:return:
+	"""
+	for sv in subvolumes:
+		if my_uuid in sv['uuids']:
+			yield from ro_descendants_chain2(subvolumes, sv)
+
+def ro_descendants_chain2(subvolumes, sv):
+	if sv['ro']:
+		yield sv
+		for sv2 in subvolumes:
+			if sv2['parent_uuid'] in sv['uuids']:
+				yield from ro_descendants_chain2(subvolumes, sv2)
+
+
+
+def load_subvol_dumps():
+	return {}
+
+
+def _get_subvolumes(command_runner, subvolume):
+	snapshots = []
+
+	for line in command_runner(['btrfs', 'subvolume', 'list', '-t', '-u', '-r', '-R', '-u', subvolume]).splitlines()[2:]:
+		snapshot = _snapshot_record_from_line(line)
+		snapshots.append(snapshot)
+	for line in command_runner(['btrfs', 'subvolume', 'list', '-t', '-u',       '-R', '-u', subvolume]).splitlines()[2:]:
+		snapshot = _snapshot_record_from_line(line)
+		found = False
+		for sn in snapshots:
+			if sn == snapshot:
+				found = True
+				break
+		if not found:
+			snapshot['ro'] = False
+			snapshots.append(snapshot)
+
 	return snapshots
 
+
+
+def _snapshot_record_from_line(line):
+	items = line.split()
+	parent_uuid = items[3]
+	received_uuid = items[4]
+	local_uuid = items[5]
+	subvol_id = items[0]
+	uuids = [local_uuid]
+	snapshot = {}
+	if received_uuid != '-':
+		snapshot['received_uuid'] = received_uuid
+		uuids.append(received_uuid)
+	if parent_uuid != '-':
+		snapshot['parent_uuid'] = parent_uuid
+	snapshot['local_uuid'] = local_uuid
+	snapshot['uuids'] = uuids
+	snapshot['subvol_id'] = subvol_id
+	snapshot['ro'] = True
+	return snapshot
+
+
+
+def _prerr(*a):
+	print(*a, file = sys.stderr)
 
 
 

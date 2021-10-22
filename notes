@@ -1,0 +1,37 @@
+
+
+[18:08:13] <koo6> hi, sorry for repeat question but is this behavior of btrfs send expected?: https://paste.debian.net/1216269/
+[18:23:39] <Forza> It is expected because you cannot break the incremental snapshot chain by having rw snaps in it
+[18:26:49] <koo6> isnt it kinda the same as making a ro snapshot1, making some changes, making another ro snapshot2, and then doing send -c snapshot1 snapshot2
+[18:27:11] <Zygo> it should be, but maybe there's a bug so it's not
+[18:27:30] <Zygo> if sub2 was created from sub it should work
+[18:29:56] <Zygo> what is the output of btrfs sub list -p -q ?
+[18:31:58] <koo6> https://paste.debian.net/1216273/
+[18:42:32] <Zygo> ok it looks like if you don't use -p but you do use -c, it will...try to pick one of the -c arguments to be a -p argument
+[18:43:13] <Zygo> which should obviously fail because sub3 isn't read-only and it's not searching recursively
+[18:43:26] <Zygo> but I don't see code that would make the search fail _for that reason_
+[18:43:36] <Zygo> so...I dunno what's going on there
+[18:45:04] <Zygo> maybe it's trying to guarantee that the -c source is something that was previously sent, and it's trying to do that by making sure the -c arguments form an unbroken chain of snapshots that ends at the current snapshot?
+[18:45:46] <Zygo> any subvol which matches that condition would work in btrfs receive, but it excludes other snapshots that might also work (but that btrfs send has no way to verify)
+[18:47:01] <Zygo> I guess you need at least one subvol for -p to trigger the diff algorithm at all?
+
+
+
+
+[19:17:15] <koo6> no idea here. But it seems that the best way to determine a list of candidates for -p (for looking up on the "other machine"), is to traverse the uuids. When i want to send  subvol1, i'm looking for all ro chains of descendants of subvol1 and of all its  ancestors
+
+
+
+
+<Zygo> the way send works is by looking at objects referenced by the sent subvol.  If the objects are also referenced by a -c or -p subvol, send says "find inode X offset Y in subvol Z, and reflink that to inode A offset B in the new subvol"
+<Zygo> send can look at a physical block and make a list of all the references to that block, then it filters that list against the set of trees that we know the receiver already has (the -c and -p list)
+<Zygo> ^ that's the kernel side of send
+<Zygo> userspace 'btrfs send' is doing something additional to the -c and -p arguments
+<Zygo> trying to remap or filter them, I'm not sure what
+<Zygo> in the kernel there are no chains, only "we have this src tree" or "we don't have this src tree"
+<Zygo> so I think the current behavior is a userspace send bug, but I'm not familiar with this code and I've only been looking at what -c does for like 10 minutes
+<Zygo> -c and -p are a little different in that -p starts with a specific src tree (the receiver starts by making a rw snapshot).  This is faster than -c because -p can assume everything in the src subvol is already present in the dst subvol
+<Zygo> -c works by looking up every extent individually and emitting a reflink copy command
+<Zygo> so -p can skip huge chunks of the tree, while -c has to list at least the files and their extent block numbers
+<Zygo> I guess the userspace send stuff is trying to force there to always be a -p because that will be faster than using only -c
+<Zygo> you might try using -p for the first -c argument, and -c for all the later ones.  It'll either work, or btrfs send will think you're wrong and break it anyway
