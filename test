@@ -1,0 +1,15 @@
+dd if=/dev/zero of=/home/koom/btrfs bc=100 bs=1M
+dd if=/dev/zero of=/home/koom/btrfs2 bc=100 bs=1M
+
+sudo losetup -P  /dev/loop60  ~/btrfs
+sudo losetup -P  /dev/loop61  ~/btrfs2
+
+sudo mkfs -t btrfs /dev/loop60  
+sudo mkfs -t btrfs /dev/loop61
+
+sudo mkdir -p /btrfs
+sudo mkdir -p /btrfs2
+
+sudo mount /dev/loop60 /btrfs   
+sudo mount /dev/loop61 /btrfs2
+
