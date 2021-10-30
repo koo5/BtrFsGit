@@ -15,7 +15,7 @@ from operator import itemgetter
 
 
 
-logging.basicConfig(level=logging.DEBUG)
+#logging.basicConfig(level=logging.DEBUG)
 
 
 
