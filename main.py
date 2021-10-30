@@ -270,6 +270,8 @@ class Bfg:
 
 		yield from VolWalker(all_subvols2).walk(my_uuid)
 
+
+
 class VolWalker:
 
 	def __init__(s, subvols_by_local_uuid):
@@ -314,10 +316,6 @@ class VolWalker:
 
 
 
-
-
-
-
 def load_subvol_dumps():
 	"""
 	dumps should probably be organized first by fs uuid and second by timestamp
@@ -328,26 +326,20 @@ def load_subvol_dumps():
 
 
 def _get_subvolumes(command_runner, subvolume):
-	snapshots = []
-
-	# first we get only the read-only
-	# then we get all of them, and take note of the rw ones
-
-	for line in command_runner(['btrfs', 'subvolume', 'list', '-t', '-u', '-r', '-R', '-u', subvolume]).splitlines()[2:]:
-		snapshot = _make_snapshot_struct_from_sub_list_output_line(line)
-		snapshots.append(snapshot)
+	subvols = []
 	for line in command_runner(['btrfs', 'subvolume', 'list', '-t', '-u',       '-R', '-u', subvolume]).splitlines()[2:]:
-		snapshot = _make_snapshot_struct_from_sub_list_output_line(line)
-		found = False
-		for sn in snapshots:
-			if sn == snapshot:
-				found = True
-				break
-		if not found:
-			snapshot['ro'] = False
-			snapshots.append(snapshot)
+		subvol = _make_snapshot_struct_from_sub_list_output_line(line)
+		subvols.append(subvol)
 
-	return snapshots
+	ro_subvols = set()
+	for line in command_runner(['btrfs', 'subvolume', 'list', '-t', '-u', '-r', '-R', '-u', subvolume]).splitlines()[2:]:
+		subvol = _make_snapshot_struct_from_sub_list_output_line(line)
+		ro_subvols.add(subvol['local_uuid'])
+
+	for i in subvols:
+		i['ro'] = (subvol['local_uuid'] in ro_subvols)
+
+	return subvols
 
 
 
@@ -357,17 +349,19 @@ def _make_snapshot_struct_from_sub_list_output_line(line):
 	received_uuid = items[4]
 	local_uuid = items[5]
 	subvol_id = items[0]
-	uuids = [local_uuid]
+
 	snapshot = {}
-	if received_uuid != '-':
-		snapshot['received_uuid'] = received_uuid
-		uuids.append(received_uuid)
-	if parent_uuid != '-':
-		snapshot['parent_uuid'] = parent_uuid
+
+	if received_uuid == '-':
+		received_uuid = None
+	if parent_uuid == '-':
+		parent_uuid = None
+
+	snapshot['received_uuid'] = received_uuid
+	snapshot['parent_uuid'] = parent_uuid
 	snapshot['local_uuid'] = local_uuid
-	snapshot['uuids'] = uuids
 	snapshot['subvol_id'] = subvol_id
-	snapshot['ro'] = True
+
 	return snapshot
 
 
@@ -378,5 +372,5 @@ def _prerr(*a):
 
 
 if __name__ == '__main__':
-        fire.Fire(Bfg)
+	fire.Fire(Bfg)
 
