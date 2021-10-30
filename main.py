@@ -235,7 +235,7 @@ class Bfg:
 
 
 	def find_common_parent(s, fs_root_mount_point='/', subvolume='/', remote_subvolume='/'):
-		candidates = list(s.parent_candidates(subvolume))
+		candidates = list(s.parent_candidates(subvolume, remote_subvolume))
 		sort(candidates, lambda sv: -sv['subvol_id'])
 		for l in candidates:
 			l['abspath'] = fs_root_mount_point + '/' + s._local_cmd(['btrfs', 'ins', 'sub', v, subvolume]).strip()
@@ -243,20 +243,20 @@ class Bfg:
 
 
 
-	def parent_candidates(s, subvolume):
+	def parent_candidates(s, subvolume, remote_subvolume):
 		my_uuid = s.get_subvol_uuid_by_path(s._local_cmd, subvolume)
 
 		remote_subvols = _get_subvolumes(s._remote_cmd, remote_subvolume)
 		local_subvols = _get_subvolumes(s._local_cmd, subvolume)
 		other_subvols = load_subvol_dumps()
 
-		all_subvols = {}
+		all_subvols = []
 		for machine,lst in {
 			'remote':remote_subvols,
 			'local':local_subvols,
 			'other':other_subvols
 		}.items():
-			for k,v in lst.items():
+			for v in lst:
 				v['machine'] = machine
 				all_subvols.append(v)
 
