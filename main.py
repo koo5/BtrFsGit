@@ -235,43 +235,45 @@ class Bfg:
 
 
 	def find_common_parent(s, fs_root_mount_point='/', subvolume='/', remote_subvolume='/'):
-		good_locals = yyy(subvolume)
-		sort(good_locals, lambda sv: -sv['subvol_id'])
-		for l in good_locals:
+		candidates = list(s.parent_candidates(subvolume))
+		sort(candidates, lambda sv: -sv['subvol_id'])
+		for l in candidates:
 			l['abspath'] = fs_root_mount_point + '/' + s._local_cmd(['btrfs', 'ins', 'sub', v, subvolume]).strip()
-		return good_locals
+		return candidates[-1]
 
 
-def yyy(subvolume):
-	good = []
-	for sv in xxx(subvolume):
-		if sv['machine'] == 'local': # why?
-			good.append(sv)
-	return good
+
+	def parent_candidates(s, subvolume):
+		my_uuid = s.get_subvol_uuid_by_path(s._local_cmd, subvolume)
+
+		remote_subvols = _get_subvolumes(s._remote_cmd, remote_subvolume)
+		local_subvols = _get_subvolumes(s._local_cmd, subvolume)
+		other_subvols = load_subvol_dumps()
+
+		all_subvols = {}
+		for machine,lst in {
+			'remote':remote_subvols,
+			'local':local_subvols,
+			'other':other_subvols
+		}.items():
+			for k,v in lst.items():
+				v['machine'] = machine
+				all_subvols.append(v)
 
 
-def xxx(remote_subvols, subvolume):
-	my_uuid = s.get_subvol_uuid_by_path(s._local_cmd, subvolume)
-	remote_subvols = _get_subvolumes(s._remote_cmd, remote_subvolume)
-	local_subvols = _get_subvolumes(s._local_cmd, subvolume)
-	other_subvols = load_subvol_dumps()
-	all_subvols = {}
-	for machine,lst in {
-		'remote':remote_subvols,
-		'local':local_subvols,
-		'other':other_subvols
-	}.items():
-		for k,v in lst.items():
-			v['machine'] = machine
-			all_subvols.append(v)
-	all_subvols2 = defaultdict(list)
-	for i in all_subvols:
-		all_subvols2[i['local_uuid']].append(i)
+		all_subvols2 = {}
+		for i in all_subvols:
+			if i['local_uuid'] in all_subvols2:
+				throw 'wut'
+			all_subvols2[i['local_uuid']] = i
 
 
-	yield from VolWalker(yyy(all_subvols2, my_uuid)
+		yield from VolWalker(all_subvols2).walk(my_uuid)
 
 class VolWalker:
+
+	def __init__(s, subvols_by_local_uuid):
+		s.by_uuid = subvols_by_local_uuid
 
 	def parent(s, uuid):
 		v = s.by_uuid[uuid]
@@ -293,11 +295,13 @@ class VolWalker:
 		if not v:
 			return
 
-		# at any case, if the read-only-ness chain is broken, the subvol or its descendants are of no use
+		# at any case, if the read-only-ness chain is broken,
+		# the subvol or its descendants are of no use
 		if v['ro'] == False:
 			break
 
-		# if this item of the chain happens to be on the remote machine, it's a good candidate for -p
+		# if this item of the chain happens to be on the remote machine,
+		# it's a good candidate for -p
 		if v['machine'] == 'remote':
 			yield v
 
@@ -314,76 +318,12 @@ class VolWalker:
 
 
 
-
-
-
-	for v in subvolumes[my_uuid]:
-		if v['machine'] == 'remote':
-			yield v
-
-	for sv in subvolumes:
-		if my_uuid in sv['uuids']:
-			yield from ro_descendants_chain2(subvolumes, sv)
-
-def ro_descendants_chain2(subvolumes, sv):
-	if sv['ro']:
-		yield sv
-		for sv2 in subvolumes:
-			if sv2['parent_uuid'] in sv['uuids']:
-				yield from ro_descendants_chain2(subvolumes, sv2)
-
-
-
-
-
-
-
-
-
-
-
-
-#
-# def xxxyyy(subvolumes, my_uuid):
-# 	while True:
-# 		found = False
-# 		for sv in subvolumes:
-# 			if my_uuid in sv['uuids']:
-# 				yield from ro_descendants_chain(subvolumes, my_uuid)
-#
-# 				todo see if a node in the chain is on the remote machine. if not, the chain is useless
-# 				if yes, any node that's on the local machine should be good?
-#
-# 				if 'parent_uuid' in sv:
-# 					yield from xxxyyy(subvolumes, sv['uuid'])
-#
-#
-# def ro_descendants_chain(subvolumes, my_uuid):
-# 	"""
-#
-# todo yield the whole chain here, but a descendant is a descendant if:
-# it's the subvol
-# its received_uuid is the uuid
-# iss parent_uuid is the uuid
-#
-# 	:param subvolumes:
-# 	:param my_uuid:
-# 	:return:
-# 	"""
-# 	for sv in subvolumes:
-# 		if my_uuid in sv['uuids']:
-# 			yield from ro_descendants_chain2(subvolumes, sv)
-#
-# def ro_descendants_chain2(subvolumes, sv):
-# 	if sv['ro']:
-# 		yield sv
-# 		for sv2 in subvolumes:
-# 			if sv2['parent_uuid'] in sv['uuids']:
-# 				yield from ro_descendants_chain2(subvolumes, sv2)
-#
-
-
 def load_subvol_dumps():
+	"""
+	dumps should probably be organized first by fs uuid and second by timestamp
+	only the most recent one for each fs will be used
+
+	"""
 	return []
 
 
