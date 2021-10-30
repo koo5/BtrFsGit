@@ -264,7 +264,7 @@ class Bfg:
 		all_subvols2 = {}
 		for i in all_subvols:
 			if i['local_uuid'] in all_subvols2:
-				throw 'wut'
+				raise 'wut'
 			all_subvols2[i['local_uuid']] = i
 
 
@@ -300,7 +300,7 @@ class VolWalker:
 		# at any case, if the read-only-ness chain is broken,
 		# the subvol or its descendants are of no use
 		if v['ro'] == False:
-			break
+			return	
 
 		# if this item of the chain happens to be on the remote machine,
 		# it's a good candidate for -p
