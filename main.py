@@ -2,6 +2,7 @@
 
 
 
+import logging
 from pathlib import Path
 from pathvalidate import sanitize_filename
 import sys,os
@@ -11,6 +12,10 @@ import fire
 import shlex
 from typing import List
 from operator import itemgetter
+
+
+
+logging.basicConfig(level=logging.DEBUG)
 
 
 
@@ -236,10 +241,11 @@ class Bfg:
 
 	def find_common_parent(s, fs_root_mount_point='/', subvolume='/', remote_subvolume='/'):
 		candidates = list(s.parent_candidates(subvolume, remote_subvolume))
-		sort(candidates, lambda sv: -sv['subvol_id'])
+		candidates.sort(key = lambda sv: -sv['subvol_id'])
 		for l in candidates:
 			l['abspath'] = fs_root_mount_point + '/' + s._local_cmd(['btrfs', 'ins', 'sub', v, subvolume]).strip()
-		return candidates[-1]
+		if len(candidates) != 0:
+			return candidates[-1]
 
 
 
@@ -275,10 +281,19 @@ class Bfg:
 class VolWalker:
 
 	def __init__(s, subvols_by_local_uuid):
+
+
+		logging.debug('subvols_by_local_uuid:')
+		for k,v in subvols_by_local_uuid.items():
+			logging.debug((k,v))
+		logging.debug('/subvols_by_local_uuid')
+
+
 		s.by_uuid = subvols_by_local_uuid
 
 	def parent(s, uuid):
 		v = s.by_uuid[uuid]
+		logging.debug(v)
 		if v['received_uuid']:
 			return v['received_uuid']
 		if v['parent_uuid']:
@@ -286,10 +301,12 @@ class VolWalker:
 
 
 	def walk(s, my_uuid):
+		logging.debug('walk ' + repr(my_uuid))
 		yield from s.ro_descendants_chain(my_uuid)
 		p = s.parent(my_uuid)
+		logging.debug('parent is ' + repr(p))
 		if p:
-			yield from s.walk(parent)
+			yield from s.walk(p)
 
 
 	def ro_descendants_chain(s, my_uuid):
@@ -327,12 +344,13 @@ def load_subvol_dumps():
 
 def _get_subvolumes(command_runner, subvolume):
 	subvols = []
-	for line in command_runner(['btrfs', 'subvolume', 'list', '-t', '-u',       '-R', '-u', subvolume]).splitlines()[2:]:
+	cmd = ['btrfs', 'subvolume', 'list', '-q', '-t', '-u', '-R', '-u']
+	for line in command_runner(cmd + [subvolume]).splitlines()[2:]:
 		subvol = _make_snapshot_struct_from_sub_list_output_line(line)
 		subvols.append(subvol)
 
 	ro_subvols = set()
-	for line in command_runner(['btrfs', 'subvolume', 'list', '-t', '-u', '-r', '-R', '-u', subvolume]).splitlines()[2:]:
+	for line in command_runner(cmd + ['-r', subvolume]).splitlines()[2:]:
 		subvol = _make_snapshot_struct_from_sub_list_output_line(line)
 		ro_subvols.add(subvol['local_uuid'])
 
@@ -344,11 +362,13 @@ def _get_subvolumes(command_runner, subvolume):
 
 
 def _make_snapshot_struct_from_sub_list_output_line(line):
+	logging.debug(line)
 	items = line.split()
+	subvol_id = items[0]
 	parent_uuid = items[3]
 	received_uuid = items[4]
 	local_uuid = items[5]
-	subvol_id = items[0]
+	path = items[6]
 
 	snapshot = {}
 
