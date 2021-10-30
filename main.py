@@ -94,7 +94,7 @@ class Bfg:
 		return (out.splitlines()[2].split()[1])
 
 
-	def commit_and_push_and_checkout(s, FS_ROOT_MOUNT_POINT=None, SUBVOLUME='/', REMOTE_SUBVOLUME='/bfg', PARENTS:List[str]=None):
+	def commit_and_push_and_checkout(s, FS_ROOT_MOUNT_POINT=None, SUBVOLUME, REMOTE_SUBVOLUME, PARENTS:List[str]=None):
 		"""
 		Snapshot your data, "btrfs send"/"btrfs receive" the snapshot to the other machine, and checkout it there
 
@@ -107,7 +107,15 @@ class Bfg:
 		s.checkout_remote(remote_snapshot_path, REMOTE_SUBVOLUME)
 		return REMOTE_SUBVOLUME
 
-	
+
+	def remote_commit_and_pull(s, FS_ROOT_MOUNT_POINT=None, REMOTE_SUBVOLUME, SUBVOLUME):
+		remote_snapshot_path = s.commit_remote(REMOTE_SUBVOLUME)
+		local_snapshot_path = s.pull(FS_ROOT_MOUNT_POINT, remote_snapshot_path)
+		s.checkout_local(local_snapshot_path, SUBVOLUME)
+		_prerr(f'DONE, pulled {remote_snapshot_path} into {SUBVOLUME}')
+		return SUBVOLUME
+
+
 	def commit_and_generate_patch(s, SUBVOLUME='/', PATCH_FILE_DIR='/', PARENTS:List[str]=None):
 		"""
 
