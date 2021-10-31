@@ -1,3 +1,7 @@
+import logging
+import json
+
+
 
 class Res:
 	"""helper class for passing results of Fire-invoked functions around and make sure they're printed understandably and machine-readably"""
@@ -9,12 +13,12 @@ class Res:
 		return json.dumps({'result':s.val})
 
 
-def _prerr(*a):
-	print(*a, file = sys.stderr)
 
 
 
 class VolWalker:
+	""" walks subvolume records to find common parents
+	"""
 
 	def __init__(s, subvols_by_local_uuid):
 
@@ -38,14 +42,18 @@ class VolWalker:
 
 	def walk(s, my_uuid):
 		logging.debug('walk ' + repr(my_uuid))
-		yield from s.ro_descendants_chain(my_uuid)
+		if s.by_uuid[my_uuid]['machine'] == 'local':
+			for _ in s.ro_descendants_chain(my_uuid, 'remote'):
+				yield from s.ro_descendants_chain(my_uuid, 'local')
+				break # we only care that a 'remote' snapshot exists, not how many there are
+
 		p = s.parent(my_uuid)
 		logging.debug('parent is ' + repr(p))
 		if p:
 			yield from s.walk(p)
 
 
-	def ro_descendants_chain(s, my_uuid):
+	def ro_descendants_chain(s, my_uuid, machine):
 		v = s.by_uuid.get(my_uuid)
 		if not v:
 			return
@@ -56,16 +64,16 @@ class VolWalker:
 			return
 
 		# if this item of the chain happens to be on the remote machine,
-		# it's a good candidate for -p
-		if v['machine'] == 'remote':
+		# the chain is a good candidate for -p
+		if v['machine'] == machine:
 			yield v
 
 		# find all descendants created through send/receive or snapshotting
 		for k,v in s.by_uuid.items():
 			if v['received_uuid'] == my_uuid:
-				yield from s.ro_descendants_chain(v['local_uuid'])
+				yield from s.ro_descendants_chain(v['local_uuid'], machine)
 			if v['parent_uuid'] == my_uuid:
-				yield from s.ro_descendants_chain(v['local_uuid'])
+				yield from s.ro_descendants_chain(v['local_uuid'], machine)
 
 
 
