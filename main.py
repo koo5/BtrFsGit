@@ -108,7 +108,7 @@ class Bfg:
 		SUBVOLUME: your subvolume (for example /data).
 		Calculate the default snapshot parent dir. In the filesystem tree, it is on the same level as your subvolume, for example `/.bfg_snapshots.data`
 		"""
-		return Res(str(Path(str(SUBVOLUME.parent) + '/.bfg_snapshots.' + SUBVOLUME.parts[-1]).absolute()))
+		return Res(str(Path(str(Path(SUBVOLUME).parent) + '/.bfg_snapshots.' + Path(SUBVOLUME).parts[-1]).absolute()))
 
 
 	def calculate_default_snapshot_path(s, SUBVOLUME, TAG):
@@ -183,7 +183,7 @@ class Bfg:
 		#print(Path(snapshot).parts[-2:])
 		fn = PATCH_FILE_DIR + '/' + '__'.join(Path(snapshot).parts[-2:])
 		#print(fn)
-		s._send(snapshot, ' > ' + fn, PARENTS)
+		s.local_send(snapshot, ' > ' + fn, PARENTS)
 		_prerr(f'DONE, generated patch \n\tfrom {snapshot} \n\tinto {fn}\n.')
 		return Res(fn)
 
@@ -205,7 +205,7 @@ class Bfg:
 
 	def checkout_local(s, SNAPSHOT, SUBVOLUME):
 		"""stash your SUBVOLUME, and replace it with SNAPSHOT"""
-		stash_local(SUBVOLUME)
+		s.stash_local(SUBVOLUME)
 		s._local_cmd(f'btrfs subvolume snapshot {SNAPSHOT} {SUBVOLUME}')
 		_prerr(f'DONE {s._local_str}, \n\tchecked out {SNAPSHOT} \n\tinto {SUBVOLUME}\n.')
 		return Res(SUBVOLUME)
@@ -265,7 +265,7 @@ class Bfg:
 
 	def remote_commit(s, REMOTE_SUBVOLUME):
 		snapshot = s._remote_make_ro_snapshot(REMOTE_SUBVOLUME, s.calculate_default_snapshot_path(Path(REMOTE_SUBVOLUME), 'remote_commit').val)
-		_prerr(f'DONE {s._remote_str},\n\t snapshotted {REMOTE_SUBVOLUME} \n\tinto {snapshot}\n.')
+		_prerr(f'DONE {s._remote_str},\n\tsnapshotted {REMOTE_SUBVOLUME} \n\tinto {snapshot}\n.')
 		return Res(snapshot)
 
 
@@ -286,25 +286,27 @@ class Bfg:
 			if PARENT is not None:
 				PARENT = PARENT['abspath']
 
-		s._send(SNAPSHOT, ' | ' + s._sshstr + ' ' + s._sudo[0] + " btrfs receive " + str(snapshot_parent), PARENT, CLONESRCS)
+		s.local_send(SNAPSHOT, ' | ' + s._sshstr + ' ' + s._sudo[0] + " btrfs receive " + str(snapshot_parent), PARENT, CLONESRCS)
 		_prerr(f'DONE, \n\tpushed {SNAPSHOT} \n\tinto {snapshot_parent}\n.')
 		return Res(str(snapshot_parent) + '/' + Path(SNAPSHOT).parts[-1])
 
 
-	def pull(s, REMOTE_SNAPSHOT, LOCAL_SUBVOLUME):
-		local_snapshot_parent = s.calculate_default_snapshot_parent_dir(Path(LOCAL_SUBVOLUME)).val
-		s._local_cmd(['mkdir', '-p', str(local_snapshot_parent)])
+	def pull(s, REMOTE_SNAPSHOT, LOCAL_SUBVOLUME, PARENT=None, CLONESRCS=[]):
+		local_snapshot_parent_dir = s.calculate_default_snapshot_parent_dir(Path(LOCAL_SUBVOLUME)).val
+		s._local_cmd(['mkdir', '-p', str(local_snapshot_parent_dir)])
 
 		if PARENT is None:
 			# there will be zero or one parent
-			PARENT = s.find_common_parent(REMOTE_SNAPSHOT, local_snapshot_parent).val
+			PARENT = s.find_common_parent(REMOTE_SNAPSHOT, local_snapshot_parent_dir).val
 			if PARENT is not None:
 				PARENT = PARENT['abspath']
 
-		s._send(SNAPSHOT, ' | ' + s._sshstr + ' ' + s._sudo[0] + " btrfs receive " + str(snapshot_parent), PARENT, CLONESRCS)
-		_prerr(f'DONE, \n\tpushed {SNAPSHOT} \n\tinto {snapshot_parent}\n.')
-		return Res(str(snapshot_parent) + '/' + Path(SNAPSHOT).parts[-1])
+		s.remote_send(REMOTE_SNAPSHOT, local_snapshot_parent_dir, PARENT, CLONESRCS)
 
+		local_snapshot = str(local_snapshot_parent_dir) + '/' + Path(REMOTE_SNAPSHOT).parts[-1]
+
+		_prerr(f'DONE, \n\tpulled {REMOTE_SNAPSHOT} \n\tinto {local_snapshot}\n.')
+		return Res(local_snapshot)
 
 
 
@@ -330,7 +332,7 @@ class Bfg:
 		return SNAPSHOT
 
 
-	def _send(s, SNAPSHOT, target, PARENT, CLONESRCS):
+	def local_send(s, SNAPSHOT, target, PARENT, CLONESRCS):
 
 		parents_args = []
 
@@ -348,7 +350,7 @@ class Bfg:
 		subprocess.check_call(cmd, shell=True)
 
 
-	def remote_send(s, REMOTE_SNAPSHOT, target, PARENT, CLONESRCS):
+	def remote_send(s, REMOTE_SNAPSHOT, LOCAL_DIR, PARENT, CLONESRCS):
 
 		parents_args = []
 
@@ -361,19 +363,14 @@ class Bfg:
 			parents_args.append(c)
 
 
-		# todo refactor subprocessing. maybe http://amoffat.github.io
-		cmd = s._sudo
-		if s._sshstr != '':
-			cmd = shlex.split(s._sshstr) + cmd
-		try:
-			return subprocess.check_output(shlex.join(c), text=True, shell=True)
-		except Exception as e:
-			_prerr(e)
-			exit(1)
-
-		['btrfs', 'send'] + parents_args + [REMOTE_SNAPSHOT]) + target
-		_prerr((cmd) + ' #...')
-		subprocess.check_call(cmd, shell=True)
+		p1 = subprocess.Popen(
+			shlex.split(s._sshstr) + s._sudo + ['btrfs', 'send'] + parents_args + [REMOTE_SNAPSHOT],
+			stdout=subprocess.PIPE)
+		p2 = subprocess.Popen(
+			s._sudo + ['btrfs', 'receive', LOCAL_DIR],
+			stdin=p1.stdout)
+		p1.stdout.close()  #  https://www.titanwolf.org/Network/q/91c3c5dd-aa49-4bf4-911d-1bfe5ac304da/y
+		print(p2.communicate())
 
 
 
