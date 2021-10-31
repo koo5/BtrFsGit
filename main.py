@@ -1,4 +1,9 @@
-#!/usr/bin/env python3.8
+#!/usr/bin/env python3
+
+
+"""
+python 3.8 required (at least for shlex.join)
+"""
 
 
 
