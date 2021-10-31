@@ -5,11 +5,16 @@ set -e
 # print commands
 set -x
 
-./testing_fss_mount_empty.sh
 
+./testing_fss_mount_empty.sh
 sudo btrfs subvolume create testing/mounts/btrfs/subvol1
 sudo touch testing/mounts/btrfs/subvol1/stuff1
 
-./main.py  commit_and_push_and_checkout   --FS_ROOT_MOUNT_POINT=testing/mounts/btrfs  --SUBVOLUME=testing/mounts/btrfs/subvol1 --REMOTE_SUBVOLUME=testing/mounts/btrfs2/subvol1
+
+set +x
+source venv/bin/activate
+set -x
+
+./main.py  --LOCAL_FS_ROOT_MOUNT_POINT=testing/mounts/btrfs  commit_and_push_and_checkout   --SUBVOLUME=testing/mounts/btrfs/subvol1 --REMOTE_SUBVOLUME=testing/mounts/btrfs2/subvol1
 
 

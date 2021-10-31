@@ -10,6 +10,17 @@ todo
 
 ## prerequisites
 
+### installation
+This isnt a proper python package yet. Python3.8 is expected. Checkout the repo, do
+```
+ virtualenv -p /usr/bin/python3.8 venv
+ pip install -r requirements.txt 
+ 
+```
+
+ 
+
+
 ### mount the root
 #### problem
 If you want to work with subvolumes mounted with `subvol=..`: This is how linux distributions set up your system by default. In this case, BFG would not be able to automatically find the filesystem path of a subvolume given its UUID, so, it wouldn't be able to call `btrfs send` with correct `-c` parents.

@@ -1,5 +1,8 @@
+
 # for development
 pdoc3
+
 # for use
 pathvalidate
 fire
+PyInquirer
