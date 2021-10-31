@@ -332,8 +332,7 @@ class Bfg:
 		return SNAPSHOT
 
 
-	def local_send(s, SNAPSHOT, target, PARENT, CLONESRCS):
-
+	def _parent_args(s, PARENT, CLONESRCS):
 		parents_args = []
 
 		if PARENT:
@@ -343,6 +342,12 @@ class Bfg:
 		for c in CLONESRCS:
 			parents_args.append('-c')
 			parents_args.append(c)
+
+		return parents_args
+
+
+	def local_send(s, SNAPSHOT, target, PARENT, CLONESRCS):
+		parents_args = s._parent_args(PARENT, CLONESRCS)
 
 		#_prerr((str(parents_args)) + ' #...')
 		cmd = shlex.join(s._sudo + ['btrfs', 'send'] + parents_args + [SNAPSHOT]) + target
@@ -351,26 +356,22 @@ class Bfg:
 
 
 	def remote_send(s, REMOTE_SNAPSHOT, LOCAL_DIR, PARENT, CLONESRCS):
+		parents_args = s._parent_args(PARENT, CLONESRCS)
 
-		parents_args = []
-
-		if PARENT:
-			parents_args.append('-p')
-			parents_args.append(PARENT)
-
-		for c in CLONESRCS:
-			parents_args.append('-c')
-			parents_args.append(c)
-
-
+		cmd1 = shlex.split(s._sshstr) + s._sudo + ['btrfs', 'send'] + parents_args + [REMOTE_SNAPSHOT]
+		cmd2 = s._sudo + ['btrfs', 'receive', LOCAL_DIR]
+		_prerr(shlex.join(cmd1) + ' >>|>> ' + shlex.join(cmd2))
 		p1 = subprocess.Popen(
-			shlex.split(s._sshstr) + s._sudo + ['btrfs', 'send'] + parents_args + [REMOTE_SNAPSHOT],
+			cmd1,
 			stdout=subprocess.PIPE)
 		p2 = subprocess.Popen(
-			s._sudo + ['btrfs', 'receive', LOCAL_DIR],
+			cmd2,
 			stdin=p1.stdout)
 		p1.stdout.close()  #  https://www.titanwolf.org/Network/q/91c3c5dd-aa49-4bf4-911d-1bfe5ac304da/y
-		print(p2.communicate())
+		p2.communicate()
+		if p2.returncode != 0:
+			_prerr('exit code ' + str(p2.returncode))
+			exit(1)
 
 
 
