@@ -405,7 +405,11 @@ class Bfg:
 
 
 	def parent_candidates(s, subvolume, remote_subvolume):
-		return Res(list(s._parent_candidates(subvolume, remote_subvolume)))
+		candidates = []
+		for c in s._parent_candidates(subvolume, remote_subvolume):
+			candidates.append(c)
+			_prerr('shared parent: ' + c['local_uuid'])
+		return Res(candidates)
 
 	def _parent_candidates(s, subvolume, remote_subvolume):
 		my_uuid = s.get_subvol_uuid_by_path(s._local_cmd, subvolume).val

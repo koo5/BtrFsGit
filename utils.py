@@ -42,6 +42,12 @@ class VolWalker:
 
 	def walk(s, my_uuid):
 		logging.debug('walk ' + repr(my_uuid))
+
+		if my_uuid not in s.by_uuid:
+			# the show almost stops here, but only almost. We could still look up all subvols that have this uuid as a parent/received uuid, and pursue those. It wouldn't be known if the missing subvol was ro or rw, so, these could be presented as only the last options to try for -p, or only as a -c.
+			return
+
+
 		if s.by_uuid[my_uuid]['machine'] == 'local':
 			for _ in s.ro_descendants_chain(my_uuid, 'remote'):
 				yield from s.ro_descendants_chain(my_uuid, 'local')
@@ -59,14 +65,15 @@ class VolWalker:
 			return
 
 		# at any case, if the read-only-ness chain is broken,
-		# the subvol or its descendants are of no use
+		# the subvol or its descendants are of no use.
+		# Or again, use as last-instance options?
 		if v['ro'] == False:
 			return
-
-		# if this item of the chain happens to be on the remote machine,
-		# the chain is a good candidate for -p
-		if v['machine'] == machine:
-			yield v
+		else:
+			# if this item of the chain happens to be on the remote machine,
+			# the chain is a good candidate for -p
+			if v['machine'] == machine:
+				yield v
 
 		# find all descendants created through send/receive or snapshotting
 		for k,v in s.by_uuid.items():
