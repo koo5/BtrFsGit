@@ -55,7 +55,7 @@ class Bfg:
 			{
 			'type': 'confirm',
 			'name': 'ok',
-			'message': msg,
+			'message': msg + ' ( --YES=True )',
 			'default': False
 			}
 		)['ok']

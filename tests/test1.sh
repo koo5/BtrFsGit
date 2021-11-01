@@ -19,4 +19,4 @@ set -x
 
 sudo dd count=10 bs=1M if=/dev/zero of="testing/mounts/btrfs2/subvol1/stuff2"
 
-./main.py  --REMOTE_FS_ROOT_MOUNT_POINT=testing/mounts/btrfs2  remote_commit_and_pull  --REMOTE_SUBVOLUME=testing/mounts/btrfs2/subvol1   --SUBVOLUME=testing/mounts/btrfs1/subvol1
+./main.py  --YES=True --REMOTE_FS_ROOT_MOUNT_POINT=testing/mounts/btrfs2  remote_commit_and_pull  --REMOTE_SUBVOLUME=testing/mounts/btrfs2/subvol1   --SUBVOLUME=testing/mounts/btrfs1/subvol1
