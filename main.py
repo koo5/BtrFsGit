@@ -30,10 +30,10 @@ from utils import *
 class Bfg:
 
 
-	def __init__(s, LOCAL_FS_ROOT_MOUNT_POINT=None, REMOTE_FS_ROOT_MOUNT_POINT=None, sshstr='', YES=False):
+	def __init__(s, LOCAL_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=None, REMOTE_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=None, sshstr='', YES=False):
 
-		s._local_fs_root_mount_point = LOCAL_FS_ROOT_MOUNT_POINT
-		s._remote_fs_root_mount_point = REMOTE_FS_ROOT_MOUNT_POINT
+		s._local_fs_id5_mount_point = LOCAL_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT
+		s._remote_fs_id5_mount_point = REMOTE_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT
 		s._yes_was_given_on_command_line = YES
 		s._sshstr = sshstr
 		# s._shush_ssh_stderr = shush_ssh_stderr # todo  # , SHUSH_SSH_STDERR=True
@@ -413,26 +413,26 @@ class Bfg:
 			s._local_add_abspath(subvol_record)
 
 	def _local_add_abspath(s, subvol_record):
-		if s._local_fs_root_mount_point is None:
-			s._local_fs_root_mount_point = prompt(
+		if s._local_fs_id5_mount_point is None:
+			s._local_fs_id5_mount_point = prompt(
 			{
 			'type': 'input',
 			'name': 'path',
-			'message': "where did you mount the top level subvolume (ID 5, not your /@ root)? Yes this is silly but i really need it right now."
+			'message': "where did you mount the top level subvolume (ID 5, not your /@ root)? Yes this is silly but i really need to know."
 			}
 		)['path']
-		subvol_record['abspath'] = s._local_fs_root_mount_point + '/' + s._local_cmd(['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), s._local_fs_root_mount_point]).strip()
+		subvol_record['abspath'] = s._local_fs_id5_mount_point + '/' + s._local_cmd(['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), s._local_fs_id5_mount_point]).strip()
 
 	def _remote_add_abspath(s, subvol_record):
-		if s._remote_fs_root_mount_point is None:
-			s._remote_fs_root_mount_point = prompt(
+		if s._remote_fs_id5_mount_point is None:
+			s._remote_fs_id5_mount_point = prompt(
 			{
 			'type': 'input',
 			'name': 'path',
 			'message': "where did you mount the top level subvolume (ID 5, not your /@ root) on the remote machine? Yes this is silly but i really need it right now."
 			}
 		)['path']
-		subvol_record['abspath'] = s._remote_fs_root_mount_point + '/' + s._remote_cmd(['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), s._remote_fs_root_mount_point]).strip()
+		subvol_record['abspath'] = s._remote_fs_id5_mount_point + '/' + s._remote_cmd(['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), s._remote_fs_id5_mount_point]).strip()
 
 
 	def parent_candidates(s, subvolume, remote_subvolume, my_uuid, direction):

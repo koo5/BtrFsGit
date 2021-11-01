@@ -5,7 +5,7 @@ python 3.8 required (at least for shlex.join)
 Classes
 -------
 
-`Bfg(LOCAL_FS_ROOT_MOUNT_POINT=None, REMOTE_FS_ROOT_MOUNT_POINT=None, sshstr='', YES=False)`
+`Bfg(LOCAL_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=None, REMOTE_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=None, sshstr='', YES=False)`
 :   
 
     ### Methods
