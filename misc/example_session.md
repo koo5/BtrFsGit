@@ -1,5 +1,5 @@
 ```
-koom@r6 ~/bfg (master)> ./main.py   --YES=true    --LOCAL_FS_ROOT_MOUNT_POINT=/nvme0n1p6_crypt_root    --sshstr='/opt/hpnssh/usr/bin/ssh   -p 2222   -o TCPRcvBufPoll=yes -o NoneSwitch=yes  -o NoneEnabled=yes     koom@10.0.0.20'    commit_and_push_and_checkout   --SUBVOLUME=/d  --REMOTE_SUBVOLUME=/mx500data/lean
+koom@r6 ~/bfg (master)> ./main.py   --YES=true    --LOCAL_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=/nvme0n1p6_crypt_root    --sshstr='/opt/hpnssh/usr/bin/ssh   -p 2222   -o TCPRcvBufPoll=yes -o NoneSwitch=yes  -o NoneEnabled=yes     koom@10.0.0.20'    commit_and_push_and_checkout   --SUBVOLUME=/d  --REMOTE_SUBVOLUME=/mx500data/lean
 sudo mkdir -p //.bfg_snapshots.d ...
 sudo btrfs subvolume snapshot -r /d //.bfg_snapshots.d/2021-11-01_20-47-36_from_r6 ...
 DONE (here), 
@@ -80,7 +80,7 @@ DONE (on the other machine),
 
 and back:
 ```
-koom@r6 ~/bfg (master)> ./main.py   --YES=true    --REMOTE_FS_ROOT_MOUNT_POINT=/mx500data    --sshstr='/opt/hpnssh/usr/bin/ssh   -p 2222   -o TCPRcvBufPoll=yes -o NoneSwitch=yes  -o NoneEnabled=yes     koom@10.0.0.20'   remote_commit_and_pull   --SUBVOLUME=/d  --REMOTE_SUBVOLUME=/mx500data/lean
+koom@r6 ~/bfg (master)> ./main.py   --YES=true    --REMOTE_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=/mx500data    --sshstr='/opt/hpnssh/usr/bin/ssh   -p 2222   -o TCPRcvBufPoll=yes -o NoneSwitch=yes  -o NoneEnabled=yes     koom@10.0.0.20'   remote_commit_and_pull   --SUBVOLUME=/d  --REMOTE_SUBVOLUME=/mx500data/lean
 /opt/hpnssh/usr/bin/ssh -p 2222 -o TCPRcvBufPoll=yes -o NoneSwitch=yes -o NoneEnabled=yes koom@10.0.0.20 sudo mkdir -p /mx500data/.bfg_snapshots.lean
 WARNING: ENABLED NONE CIPHER!!!
 /opt/hpnssh/usr/bin/ssh -p 2222 -o TCPRcvBufPoll=yes -o NoneSwitch=yes -o NoneEnabled=yes koom@10.0.0.20 sudo btrfs subvolume snapshot -r /mx500data/lean /mx500data/.bfg_snapshots.lean/2021-11-01_20-49-53_remote_commit

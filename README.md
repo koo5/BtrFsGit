@@ -32,11 +32,11 @@ I built this because my scenario is not just simple backup, but also transfering
 ## example workflow
 this is how i ping-pong the changes to my data between my two machines:
 ```
-./main.py   --YES=true    --LOCAL_FS_ROOT_MOUNT_POINT=/nvme0n1p6_crypt_root    --sshstr='/opt/hpnssh/usr/bin/ssh   -p 2222   -o TCPRcvBufPoll=yes -o NoneSwitch=yes  -o NoneEnabled=yes     koom@10.0.0.20'    commit_and_push_and_checkout   --SUBVOLUME=/d  --REMOTE_SUBVOLUME=/mx500data/lean
+./main.py   --YES=true    --LOCAL_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=/nvme0n1p6_crypt_root    --sshstr='/opt/hpnssh/usr/bin/ssh   -p 2222   -o TCPRcvBufPoll=yes -o NoneSwitch=yes  -o NoneEnabled=yes     koom@10.0.0.20'    commit_and_push_and_checkout   --SUBVOLUME=/d  --REMOTE_SUBVOLUME=/mx500data/lean
 ```
 and back:
 ```
-./main.py   --YES=true    --REMOTE_FS_ROOT_MOUNT_POINT=/mx500data    --sshstr='/opt/hpnssh/usr/bin/ssh   -p 2222   -o TCPRcvBufPoll=yes -o NoneSwitch=yes  -o NoneEnabled=yes     koom@10.0.0.20'   remote_commit_and_pull   --SUBVOLUME=/d  --REMOTE_SUBVOLUME=/mx500data/lean
+./main.py   --YES=true    --REMOTE_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=/mx500data    --sshstr='/opt/hpnssh/usr/bin/ssh   -p 2222   -o TCPRcvBufPoll=yes -o NoneSwitch=yes  -o NoneEnabled=yes     koom@10.0.0.20'   remote_commit_and_pull   --SUBVOLUME=/d  --REMOTE_SUBVOLUME=/mx500data/lean
 ```
 full output:
 [example_session.md](misc/example_session.md)
