@@ -23,7 +23,7 @@ from utils import *
 
 
 
-#logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.DEBUG)
 
 
 
@@ -397,11 +397,11 @@ class Bfg:
 
 	def find_common_parent(s, subvolume, remote_subvolume, my_uuid, direction):
 		candidates = s.parent_candidates(subvolume, remote_subvolume, my_uuid, direction).val
-		candidates.sort(key = lambda sv: -sv['subvol_id'])
+		#candidates.sort(key = lambda sv: sv['subvol_id']) # nope, subvol id is a crude approximation. What happens when you snapshot and old ro snapshot? It gets the highest id.
 		if len(candidates) != 0:
-			winner = candidates[-1]
+			winner = candidates[0]
 			s._add_abspath(winner)
-			_prerr(f'found COMMON PARENT {winner}.')
+			_prerr(f'PICKED COMMON PARENT {winner}.')
 			return Res(winner)
 		else:
 			return Res(None)
@@ -494,12 +494,13 @@ def _get_subvolumes(command_runner, subvolume):
 		i['ro'] = ro
 		#_prerr(str(i))
 
+	subvols.sort(key = lambda sv: -sv['subvol_id'])
 	return subvols
 
 
 
 def _make_snapshot_struct_from_sub_list_output_line(line):
-	logging.debug(line)
+	#logging.debug(line)
 	items = line.split()
 	subvol_id = items[0]
 	parent_uuid = items[3]

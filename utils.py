@@ -24,10 +24,10 @@ class VolWalker:
 
 		s.source = direction[0]
 		s.target = direction[1]
-		logging.debug('subvols_by_local_uuid:')
-		for k,v in subvols_by_local_uuid.items():
-			logging.debug((k,v))
-		logging.debug('/subvols_by_local_uuid')
+		#logging.debug('subvols_by_local_uuid:')
+		#for k,v in subvols_by_local_uuid.items():
+		#	logging.debug((k,v))
+		#logging.debug('/subvols_by_local_uuid')
 
 
 		s.by_uuid = subvols_by_local_uuid
@@ -45,18 +45,60 @@ class VolWalker:
 		logging.debug('walk ' + repr(my_uuid))
 
 		if my_uuid not in s.by_uuid:
-			# the show almost stops here, but only almost. We could still look up all subvols that have this uuid as a parent/received uuid, and pursue those. It wouldn't be known if the missing subvol was ro or rw, so, these could be presented as only the last options to try for -p, or only as a -c.
+			# the show almost stops here, but only almost. We could still look up all subvols that have this uuid as a parent/received uuid, and pursue those. It wouldn't be known if the missing subvol was ro or rw, so, these could be presented as only the last options to try for -p, or only as a -c or something.
+			
+			# another todo thing is that when we run into an rw subvol, we assume that it might have been modified, so it simply doesnt form a ro-chain, but idk how btrfs looks at this, maybe if there were actually no modifications, it'd keep a constant gen id, and a ro child snapshot of it could be used?
+			
 			return
 
-		if s.by_uuid[my_uuid]['ro']:
-			for _ in s.ro_descendants_chain(my_uuid, s.target):
-				yield from s.ro_descendants_chain(my_uuid, s.source)
-				break # we only care that a 'remote' snapshot exists, not how many there are
+		for i in s.ro_chain(my_uuid):
+			# ^ grab my_uuid if it's ro, otherwise grab it's ro children, and then their children recursively. What this accomplishes is that we'll be looking at a direct ro snapshot (or at the ro subvol itself), so that we can now check if it made it to the other side:
+			
+			for remote_snapshot in s.ro_descendants_chain(i, s.target):
+				remote_snapshot_local_uuid = remote_snapshot['local_uuid']
+				logging.debug(f'{remote_snapshot_local_uuid} is on remote.')
+				for x in s.ro_descendants_chain(i, s.source):
+					x_local_uuid = x['local_uuid']
+					logging.debug(f'local counterpart: {x_local_uuid}.')
+					yield x
+				# we only care that a 'remote' snapshot exists, not how many there are:
+				break 
 
 		p = s.parent(my_uuid)
 		logging.debug('parent is ' + repr(p))
 		if p:
 			yield from s.walk(p)
+
+
+	def ro_chain(s, uuid):
+		v = s.by_uuid.get(uuid)
+		if not v:
+			return
+		if v['ro']:
+			yield uuid
+		for k,v in s.by_uuid.items():
+			if v['received_uuid'] == uuid:
+				yield from s.ro_chain2(v['local_uuid'])
+			if v['parent_uuid'] == uuid:
+				yield from s.ro_chain2(v['local_uuid'])
+	
+	
+	def ro_chain2(s, uuid):
+		v = s.by_uuid.get(uuid)
+		if not v:
+			return
+		if not v['ro']:
+			return
+		yield from s.ro_chain(uuid)
+		
+
+	def ro_descendants_chain0(s, my_uuid, machine):
+		# find all descendants created through send/receive or snapshotting
+		for k,v in s.by_uuid.items():
+			if v['received_uuid'] == my_uuid:
+				yield from s.ro_descendants_chain(v['local_uuid'], machine)
+			if v['parent_uuid'] == my_uuid:
+				yield from s.ro_descendants_chain(v['local_uuid'], machine)
 
 
 	def ro_descendants_chain(s, my_uuid, machine):
@@ -75,12 +117,8 @@ class VolWalker:
 			if v['machine'] == machine:
 				yield v
 
-		# find all descendants created through send/receive or snapshotting
-		for k,v in s.by_uuid.items():
-			if v['received_uuid'] == my_uuid:
-				yield from s.ro_descendants_chain(v['local_uuid'], machine)
-			if v['parent_uuid'] == my_uuid:
-				yield from s.ro_descendants_chain(v['local_uuid'], machine)
+		yield from s.ro_descendants_chain0(my_uuid, machine)
+		
 
 
 
