@@ -32,13 +32,13 @@ This isnt a proper python package yet. Python3.8 is expected. Checkout the repo,
 ```
 ### mount the root
 #### problem
-If you want to work with subvolumes mounted with `subvol=..`: This is how linux distributions set up your system by default. In this case, BFG would not be able to automatically find the filesystem path of a subvolume given its UUID, so, it wouldn't be able to call `btrfs send` with correct `-c` parents.
+If you want to work with subvolumes mounted with `subvol=..`: This is how linux distributions set up your system by default. In this case, BFG would not be able to automatically find the filesystem path of a subvolume given its UUID, so, it wouldn't be able to call `btrfs send` with correct `-p` parents.
 #### solution
 make sure that the root subvolume of your BTRFS filesystem is always mounted. For example my fstab entry:
 ```
 /dev/mapper/nvme0n1p6_crypt /nvme0n1p6_crypt_root  btrfs   defaults,subvol=   0   2
 ```
-For some operations, you will need to pass this filesystem path like so: `--LOCAL_FS_ROOT_MOUNT_POINT=...` or `--REMOTE_FS_ROOT_MOUNT_POINT=...`.
+For some operations, you will need to pass this mountpoint like so: `--LOCAL_FS_ROOT_MOUNT_POINT=...` or `--REMOTE_FS_ROOT_MOUNT_POINT=...`.
 ### avoid nested subvolumes
 #### problem
 To be able to make use of stash and checkout, the subvolume that you want to manage with BFG should not contain other subvolumes, so that it can be `btrfs subvolume delete`'d automatically.
