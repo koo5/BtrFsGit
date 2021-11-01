@@ -38,6 +38,7 @@ make sure that the root subvolume of your BTRFS filesystem is always mounted. Fo
 ```
 /dev/mapper/nvme0n1p6_crypt /nvme0n1p6_crypt_root  btrfs   defaults,subvol=   0   2
 ```
+For some operations, you will need to pass this filesystem path like so: `--LOCAL_FS_ROOT_MOUNT_POINT=...` or `--REMOTE_FS_ROOT_MOUNT_POINT=...`.
 ### avoid nested subvolumes
 #### problem
 To be able to make use of stash and checkout, the subvolume that you want to manage with BFG should not contain other subvolumes, so that it can be `btrfs subvolume delete`'d automatically.
