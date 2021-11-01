@@ -22,16 +22,18 @@ from utils import *
 
 
 
-#logging.basicConfig(level=logging.DEBUG)
+
+logging.basicConfig(level=logging.DEBUG)
 
 
 
 class Bfg:
 
 
-	def __init__(s, LOCAL_FS_ROOT_MOUNT_POINT, sshstr='', YES=False):
+	def __init__(s, LOCAL_FS_ROOT_MOUNT_POINT=None, REMOTE_FS_ROOT_MOUNT_POINT=None, sshstr='', YES=False):
 
 		s._local_fs_root_mount_point = LOCAL_FS_ROOT_MOUNT_POINT
+		s._remote_fs_root_mount_point = REMOTE_FS_ROOT_MOUNT_POINT
 		s._yes_was_given_on_command_line = YES
 		s._sshstr = sshstr
 		# s._shush_ssh_stderr = shush_ssh_stderr # todo  # , SHUSH_SSH_STDERR=True
@@ -116,7 +118,7 @@ class Bfg:
 		return Res(str(Path(str(Path(SUBVOLUME).parent) + '/.bfg_snapshots.' + Path(SUBVOLUME).parts[-1]).absolute()))
 
 
-	def calculate_default_snapshot_path(s, SUBVOLUME, TAG):
+	def calculate_default_snapshot_path(s, SUBVOLUME, TAG): #, TAG2):
 		"""
 		calculate the filesystem path where a snapshot should go, given a subvolume and a tag
 		"""
@@ -391,8 +393,13 @@ class Bfg:
 		else:
 			return Res(None)
 
-
 	def _add_abspath(s, subvol_record):
+		if subvol_record['machine'] == 'remote':
+			s._remote_add_abspath(subvol_record)
+		else:
+			s._local_add_abspath(subvol_record)
+
+	def _local_add_abspath(s, subvol_record):
 		if s._local_fs_root_mount_point is None:
 			s._local_fs_root_mount_point = prompt(
 			{
@@ -402,6 +409,17 @@ class Bfg:
 			}
 		)['path']
 		subvol_record['abspath'] = s._local_fs_root_mount_point + '/' + s._local_cmd(['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), s._local_fs_root_mount_point]).strip()
+
+	def _remote_add_abspath(s, subvol_record):
+		if s._remote_fs_root_mount_point is None:
+			s._remote_fs_root_mount_point = prompt(
+			{
+			'type': 'input',
+			'name': 'path',
+			'message': "where did you mount the top level subvolume (ID 5, not your /@ root) on the remote machine? Yes this is silly but i really need it right now."
+			}
+		)['path']
+		subvol_record['abspath'] = s._remote_fs_root_mount_point + '/' + s._remote_cmd(['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), s._remote_fs_root_mount_point]).strip()
 
 
 	def parent_candidates(s, subvolume, remote_subvolume, my_uuid, direction):

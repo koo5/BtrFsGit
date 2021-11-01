@@ -48,8 +48,7 @@ class VolWalker:
 			# the show almost stops here, but only almost. We could still look up all subvols that have this uuid as a parent/received uuid, and pursue those. It wouldn't be known if the missing subvol was ro or rw, so, these could be presented as only the last options to try for -p, or only as a -c.
 			return
 
-
-		if s.by_uuid[my_uuid]['machine'] == s.source:
+		if s.by_uuid[my_uuid]['ro']:
 			for _ in s.ro_descendants_chain(my_uuid, s.target):
 				yield from s.ro_descendants_chain(my_uuid, s.source)
 				break # we only care that a 'remote' snapshot exists, not how many there are
