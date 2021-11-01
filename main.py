@@ -232,7 +232,7 @@ class Bfg:
 		return Res(SUBVOLUME)
 		
 
-	def stash_local(s, SUBVOLUME):
+	def stash_local(s, SUBVOLUME, SNAPSHOT_TAG = 'stash', SNAPSHOT_NAME=None):
 		"""
 		snapshot and delete your SUBVOLUME
 
@@ -242,7 +242,7 @@ class Bfg:
 			_prerr(f'nothing to stash {s._local_str}, {SUBVOLUME} doesn\'t exist.')
 			return None
 		else:
-			snapshot = s._local_make_ro_snapshot(SUBVOLUME, s.calculate_default_snapshot_path(SUBVOLUME, 'stash_before_local_checkout').val)
+			snapshot = s._local_make_ro_snapshot(SUBVOLUME, s.calculate_default_snapshot_path(SUBVOLUME, SNAPSHOT_TAG, SNAPSHOT_NAME).val)
 
 			cmd = f'btrfs subvolume delete {SUBVOLUME}'
 			if not s._yes(cmd):
@@ -294,10 +294,23 @@ class Bfg:
 
 
 
-	def remote_commit(s, REMOTE_SUBVOLUME):
-		snapshot = s._remote_make_ro_snapshot(REMOTE_SUBVOLUME, s.calculate_default_snapshot_path(Path(REMOTE_SUBVOLUME), 'remote_commit').val)
-		_prerr(f'DONE {s._remote_str},\n\tsnapshotted {REMOTE_SUBVOLUME} \n\tinto {snapshot}\n.')
-		return Res(snapshot)
+	def remote_commit(s, REMOTE_SUBVOLUME, TAG=None, SNAPSHOT=None, SNAPSHOT_NAME=None):
+		if TAG and SNAPSHOT:
+			_prerr(f'please specify SNAPSHOT or TAG, not both')
+			return -1
+		if TAG and SNAPSHOT_NAME:
+			_prerr(f'please specify SNAPSHOT_NAME or TAG, not both')
+			return -1
+		if SNAPSHOT and SNAPSHOT_NAME:
+			_prerr(f'please specify SNAPSHOT_NAME or SNAPSHOT, not both')
+			return -1
+		if SNAPSHOT is not None:
+			SNAPSHOT = Path(SNAPSHOT).absolute()
+		else:
+			SNAPSHOT = s.calculate_default_snapshot_path(Path(REMOTE_SUBVOLUME), 'remote_commit', SNAPSHOT_NAME).val
+		s._remote_make_ro_snapshot(REMOTE_SUBVOLUME, SNAPSHOT)
+		_prerr(f'DONE {s._remote_str},\n\tsnapshotted {REMOTE_SUBVOLUME} \n\tinto {SNAPSHOT}\n.')
+		return Res(SNAPSHOT)
 
 
 				
