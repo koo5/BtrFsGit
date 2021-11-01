@@ -302,7 +302,7 @@ class Bfg:
 
 		if PARENT is None:
 			my_uuid = s.get_subvol_uuid_by_path(s._remote_cmd, REMOTE_SNAPSHOT).val
-			PARENT = s.find_common_parent(REMOTE_SNAPSHOT, local_snapshot_parent_dir, my_uuid, ('remote', 'local')).val
+			PARENT = s.find_common_parent(local_snapshot_parent_dir, REMOTE_SNAPSHOT, my_uuid, ('remote', 'local')).val
 			if PARENT is not None:
 				PARENT = PARENT['abspath']
 
