@@ -20,9 +20,10 @@ class VolWalker:
 	""" walks subvolume records to find common parents
 	"""
 
-	def __init__(s, subvols_by_local_uuid):
+	def __init__(s, subvols_by_local_uuid, direction):
 
-
+		s.source = direction[0]
+		s.target = direction[1]
 		logging.debug('subvols_by_local_uuid:')
 		for k,v in subvols_by_local_uuid.items():
 			logging.debug((k,v))
@@ -48,9 +49,9 @@ class VolWalker:
 			return
 
 
-		if s.by_uuid[my_uuid]['machine'] == 'local':
-			for _ in s.ro_descendants_chain(my_uuid, 'remote'):
-				yield from s.ro_descendants_chain(my_uuid, 'local')
+		if s.by_uuid[my_uuid]['machine'] == s.source:
+			for _ in s.ro_descendants_chain(my_uuid, s.target):
+				yield from s.ro_descendants_chain(my_uuid, s.source)
 				break # we only care that a 'remote' snapshot exists, not how many there are
 
 		p = s.parent(my_uuid)

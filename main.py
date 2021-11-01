@@ -286,8 +286,8 @@ class Bfg:
 		s._remote_cmd(['mkdir', '-p', str(snapshot_parent)])
 
 		if PARENT is None:
-			# there will be zero or one parent
-			PARENT = s.find_common_parent(SUBVOLUME, str(snapshot_parent)).val
+			my_uuid = s.get_subvol_uuid_by_path(s._local_cmd, SUBVOLUME).val
+			PARENT = s.find_common_parent(SUBVOLUME, str(snapshot_parent), my_uuid, ('local','remote')).val
 			if PARENT is not None:
 				PARENT = PARENT['abspath']
 
@@ -301,8 +301,8 @@ class Bfg:
 		s._local_cmd(['mkdir', '-p', str(local_snapshot_parent_dir)])
 
 		if PARENT is None:
-			# there will be zero or one parent
-			PARENT = s.find_common_parent(REMOTE_SNAPSHOT, local_snapshot_parent_dir).val
+			my_uuid = s.get_subvol_uuid_by_path(s._remote_cmd, REMOTE_SNAPSHOT).val
+			PARENT = s.find_common_parent(REMOTE_SNAPSHOT, local_snapshot_parent_dir, my_uuid, ('remote', 'local')).val
 			if PARENT is not None:
 				PARENT = PARENT['abspath']
 
@@ -380,8 +380,8 @@ class Bfg:
 
 
 
-	def find_common_parent(s, subvolume, remote_subvolume):
-		candidates = s.parent_candidates(subvolume, remote_subvolume).val
+	def find_common_parent(s, subvolume, remote_subvolume, my_uuid, direction):
+		candidates = s.parent_candidates(subvolume, remote_subvolume, my_uuid, direction).val
 		candidates.sort(key = lambda sv: -sv['subvol_id'])
 		if len(candidates) != 0:
 			winner = candidates[-1]
@@ -404,15 +404,15 @@ class Bfg:
 		subvol_record['abspath'] = s._local_fs_root_mount_point + '/' + s._local_cmd(['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), s._local_fs_root_mount_point]).strip()
 
 
-	def parent_candidates(s, subvolume, remote_subvolume):
+	def parent_candidates(s, subvolume, remote_subvolume, my_uuid, direction):
 		candidates = []
-		for c in s._parent_candidates(subvolume, remote_subvolume):
+		for c in s._parent_candidates(subvolume, remote_subvolume, my_uuid, direction):
 			candidates.append(c)
 			_prerr('shared parent: ' + c['local_uuid'])
 		return Res(candidates)
 
-	def _parent_candidates(s, subvolume, remote_subvolume):
-		my_uuid = s.get_subvol_uuid_by_path(s._local_cmd, subvolume).val
+
+	def _parent_candidates(s, subvolume, remote_subvolume, my_uuid, direction):
 
 		remote_subvols = _get_subvolumes(s._remote_cmd, remote_subvolume)
 		local_subvols = _get_subvolumes(s._local_cmd, subvolume)
@@ -436,7 +436,7 @@ class Bfg:
 			all_subvols2[i['local_uuid']] = i
 
 
-		yield from VolWalker(all_subvols2).walk(my_uuid)
+		yield from VolWalker(all_subvols2, direction).walk(my_uuid)
 
 
 
