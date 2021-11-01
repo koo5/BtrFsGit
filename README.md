@@ -6,14 +6,28 @@ B-tree Filesystem Git attempts to enable git-like workflow for subvolumes. Commi
 I built this because my scenario is not just simple backup, but also transfering subvolumes back and forth between multiple machines, where no one machine is a single source of truth. In other words, a desktop computer and a notebook, and a subvol with a bunch of VM images. And then maybe a bunch of external backup HDDs. 
 
 ## cool features
-* It tries to figure out shared parents smartly.
-* No config files, just specify a source subvol and a target subvol on the command line.
+* It tries to figure out shared parents smartly, by walking the uuids of subvolumes of both filesystems. It doesn't just expect the last transferred snapshot to "be there", in a fixed location, like other tools do.
+* No config files, just specify a source subvol and a target subvol (and the ID 5 mount point) on the command line, and in case of a remote machine, a ssh command to use.
 
-## planned features / wishlist
+## what this doesn's do (yet?)
+* snapshot pruning
+* cleanup after failure
+* config files
+
+## what this isn't yet
+* a proper python package that you can install into your $PATH
+
+## planned features
 * automatically saving and propagating `sub list` dumps - to allow finding shared parents also for offine generating of send streams, even across multiple machine hops
 * Generating a send stream, and applying it later.
+
+## wishlist
 * some kind of integration with https://github.com/csirac2/snazzer/#snazzer for integrity checks
 * maybe some automation for non-BTRFS backups, ie, create a snapshot, rsync it to an ext4, (and apply snazzer..)
+
+## what this will probably never be
+* an attempt to immitate more of git, like merging, exact same command syntax, commit messages (well maybe commit messages would make sense, maybe as a backend to datalad?)..
+
 
 ## example workflow
 this is how i ping-pong the changes to my data between my two machines:
