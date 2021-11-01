@@ -2,13 +2,36 @@
 Work in progress.
 B-tree Filesystem Git attempts to enable git-like workflow for subvolumes. Commit, push, checkout, stash, pull..
 
+## why
+I built this because my scenario is not just simple backup, but also transfering subvolumes back and forth between multiple machines, where no one machine is a single source of truth. In other words, a desktop computer and a notebook, and a subvol with a bunch of VM images. And a bunch of external backup HDDs. 
+
+## why is this cool
+It tries to figure out shared parents smartly. In future it might even work across multiple machine hops.
+
+## planned features / wishlist
+* automatically saving and propagating `sub list` dumps - to allow finding shared parents even for offine generating of send streams
+* Generating a send stream from one HDD, and applying it to another HDD later.
+* integration with https://github.com/csirac2/snazzer/#snazzer for integrity checks
+* some automation for non-BTRFS backups, ie, create a snapshot, rsync it to an ext4, (and apply snazzer..)
+
 ## example workflow
-todo
+[tests/test1.sh]()
 
 ## available commands
 [docs/]()
 
 ## prerequisites
+
+### installation
+This isnt a proper python package yet. Python3.8 is expected. Checkout the repo, do
+```
+ virtualenv -p /usr/bin/python3.8 venv
+ pip install -r requirements.txt 
+ 
+```
+
+ 
+
 
 ### mount the root
 #### problem
