@@ -233,10 +233,13 @@ class Bfg:
 
 		todo: maybe an alternative way should be to just move it?
 		"""
-		snapshot = s._local_make_ro_snapshot(SUBVOLUME, s.calculate_default_snapshot_path(SUBVOLUME, 'stash_before_local_checkout').val)
-		s._local_cmd(f'btrfs subvolume delete {SUBVOLUME}')
-		_prerr(f'DONE {s._local_str}, \n\tsnapshotted {SUBVOLUME} into \n\t{snapshot}\n, and deleted it.')
-		return Res(snapshot)
+		if s._local_cmd(['ls', SUBVOLUME], die_on_error=False) == -1:
+			_prerr(f'nothing to stash {s._local_str}, {SUBVOLUME} doesn\'t exist.')
+			return None
+		else:			snapshot = s._local_make_ro_snapshot(SUBVOLUME, s.calculate_default_snapshot_path(SUBVOLUME, 'stash_before_local_checkout').val)
+			s._local_cmd(f'btrfs subvolume delete {SUBVOLUME}')
+			_prerr(f'DONE {s._local_str}, \n\tsnapshotted {SUBVOLUME} into \n\t{snapshot}\n, and deleted it.')
+			return Res(snapshot)
 
 	def stash_remote(s, SUBVOLUME):
 		"""snapshot and delete your SUBVOLUME"""
