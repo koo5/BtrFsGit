@@ -16,27 +16,20 @@ I built this because my scenario is not just simple backup, but also transfering
 * maybe some automation for non-BTRFS backups, ie, create a snapshot, rsync it to an ext4, (and apply snazzer..)
 
 ## example workflow
-[](tests/test1.sh)
-[](../blob/tests/test1.sh)
 [test1](tests/test1.sh)
-[test1](../blob/tests/test1.sh)
 
 ## available commands
-[docs/]()
+[docs](docs/)
 
 ## prerequisites
 
-### installation
+### install
 This isnt a proper python package yet. Python3.8 is expected. Checkout the repo, do
 ```
  virtualenv -p /usr/bin/python3.8 venv
  pip install -r requirements.txt 
  
 ```
-
- 
-
-
 ### mount the root
 #### problem
 If you want to work with subvolumes mounted with `subvol=..`: This is how linux distributions set up your system by default. In this case, BFG would not be able to automatically find the filesystem path of a subvolume given its UUID, so, it wouldn't be able to call `btrfs send` with correct `-c` parents.
