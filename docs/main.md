@@ -1,10 +1,11 @@
 Module main
 ===========
+python 3.8 required (at least for shlex.join)
 
 Classes
 -------
 
-`Bfg(LOCAL_FS_ROOT_MOUNT_POINT, sshstr='', YES=False)`
+`Bfg(LOCAL_FS_ROOT_MOUNT_POINT=None, REMOTE_FS_ROOT_MOUNT_POINT=None, sshstr='', YES=False)`
 :   
 
     ### Methods
@@ -42,7 +43,7 @@ Classes
         :param REMOTE_SUBVOLUME: desired filesystem path of your data on the other machine
         :return: filesystem path of the snapshot created on the other machine
 
-    `find_common_parent(s, subvolume, remote_subvolume)`
+    `find_common_parent(s, subvolume, remote_subvolume, my_uuid, direction)`
     :
 
     `get_subvol_uuid_by_path(s, runner, path)`
@@ -53,7 +54,13 @@ Classes
         :param SNAPSHOT: override default filesystem path where snapshot will be created
         :param TAG: override the tag for the default SNAPSHOT (hostname by default)
 
-    `parent_candidates(s, subvolume, remote_subvolume)`
+    `local_send(s, SNAPSHOT, target, PARENT, CLONESRCS)`
+    :
+
+    `parent_candidates(s, subvolume, remote_subvolume, my_uuid, direction)`
+    :
+
+    `pull(s, REMOTE_SNAPSHOT, LOCAL_SUBVOLUME, PARENT=None, CLONESRCS=[])`
     :
 
     `push(s, SUBVOLUME, SNAPSHOT, REMOTE_SUBVOLUME, PARENT=None, CLONESRCS=[])`
@@ -72,8 +79,13 @@ Classes
         :param SUBVOLUME:
         :return:
 
+    `remote_send(s, REMOTE_SNAPSHOT, LOCAL_DIR, PARENT, CLONESRCS)`
+    :
+
     `stash_local(s, SUBVOLUME)`
     :   snapshot and delete your SUBVOLUME
+        
+        todo: maybe an alternative way should be to just move it?
 
     `stash_remote(s, SUBVOLUME)`
     :   snapshot and delete your SUBVOLUME

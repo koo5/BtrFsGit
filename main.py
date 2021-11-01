@@ -238,7 +238,11 @@ class Bfg:
 			return None
 		else:
 			snapshot = s._local_make_ro_snapshot(SUBVOLUME, s.calculate_default_snapshot_path(SUBVOLUME, 'stash_before_local_checkout').val)
-			s._local_cmd(f'btrfs subvolume delete {SUBVOLUME}')
+
+			cmd = f'btrfs subvolume delete {SUBVOLUME}'
+			if not s._yes(cmd):
+				exit(1)
+			s._local_cmd(cmd)
 			_prerr(f'DONE {s._local_str}, \n\tsnapshotted {SUBVOLUME} into \n\t{snapshot}\n, and deleted it.')
 			return Res(snapshot)
 
@@ -249,7 +253,12 @@ class Bfg:
 			return None
 		else:
 			snapshot = s._remote_make_ro_snapshot(SUBVOLUME, s.calculate_default_snapshot_path(Path(SUBVOLUME), 'stash_before_remote_checkout').val)
-			s._remote_cmd(f'btrfs subvolume delete {SUBVOLUME}')
+
+			cmd = f'btrfs subvolume delete {SUBVOLUME}'
+			if not s._yes(cmd):
+				exit(1)
+			s._remote_cmd(cmd)
+
 			_prerr(f'DONE {s._remote_str}, \n\tsnapshotted {SUBVOLUME} \n\tinto {snapshot}\n, and deleted it.')
 			return Res(snapshot)
 		
