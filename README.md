@@ -41,9 +41,9 @@ make sure that the root subvolume of your BTRFS filesystem is always mounted. Fo
 For some operations, you will need to pass this mountpoint like so: `--LOCAL_FS_ROOT_MOUNT_POINT=...` or `--REMOTE_FS_ROOT_MOUNT_POINT=...`.
 ### avoid nested subvolumes
 #### problem
-To be able to make use of stash and checkout, the subvolume that you want to manage with BFG should not contain other subvolumes, so that it can be `btrfs subvolume delete`'d automatically.
+To be able to make use of stash and checkout, the subvolume that you want to manage with BFG should not contain other subvolumes, so that it can be `btrfs subvolume delete`'d (or possibly `mv`'d) without affecting your snapshots or other subvolumes.
 #### solution
-As an example, i have a subvolume `/data`. By default, BFG will store all its data in `/.bfg_snapshots.data`, and i don't have snapper or similar doing stuff in `/data/.snapshots` or similar.
+As an example, i have a subvolume `/data`, and by default, BFG will store all snapshots in `/.bfg_snapshots.data`, and i don't have snapper doing stuff in `/data/.snapshots`.
 
 ### prevent writes to incomplete snapshots
 #### problem
