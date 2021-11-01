@@ -118,20 +118,25 @@ class Bfg:
 		return Res(str(Path(str(Path(SUBVOLUME).parent) + '/.bfg_snapshots.' + Path(SUBVOLUME).parts[-1]).absolute()))
 
 
-	def calculate_default_snapshot_path(s, SUBVOLUME, TAG): #, TAG2):
+	def calculate_default_snapshot_path(s, SUBVOLUME, TAG, NAME_OVERRIDE): #, TAG2):
 		"""
 		calculate the filesystem path where a snapshot should go, given a subvolume and a tag
 		"""
 		parent = s.calculate_default_snapshot_parent_dir(SUBVOLUME).val
 
-		tss = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
-		#tss = subprocess.check_output(['date', '-u', "+%Y-%m-%d_%H-%M-%S"], text=True).strip()
-		ts = sanitize_filename(tss.replace(' ', '_'))
+		if NAME_OVERRIDE is not None:
+			name = NAME_OVERRIDE
+		else:
 
-		if TAG is None:
-			TAG = 'from_' + subprocess.check_output(['hostname'], text=True).strip()
+			tss = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+			#tss = subprocess.check_output(['date', '-u', "+%Y-%m-%d_%H-%M-%S"], text=True).strip()
+			ts = sanitize_filename(tss.replace(' ', '_'))
 
-		return Res(str(Path(str(parent) + '/' + ts + '_' + TAG)))
+			if TAG is None:
+				TAG = 'from_' + subprocess.check_output(['hostname'], text=True).strip()
+			name = ts + '_' + TAG
+
+		return Res(str(Path(str(parent) + '/' + name)))
 
 
 	def get_subvol_uuid_by_path(s, runner, path):
@@ -196,10 +201,10 @@ class Bfg:
 
 		
 
-	def commit_and_push(s, SUBVOLUME='/', REMOTE_SUBVOLUME='/bfg', PARENTS:List[str]=None):
+	def commit_and_push(s, SUBVOLUME, REMOTE_SUBVOLUME, SNAPSHOT_TAG=None, SNAPSHOT_PATH=None, SNAPSHOT_NAME=None, PARENT=None, CLONESRCS:List[str]=[]):
 		"""commit, and transfer the snapshot into .bfg_snapshots on the other machine"""
-		snapshot = s.local_commit(SUBVOLUME).val
-		return Res(s.push(SUBVOLUME, snapshot, REMOTE_SUBVOLUME, PARENTS).val)
+		snapshot = s.local_commit(SUBVOLUME, SNAPSHOT_TAG, SNAPSHOT_PATH, SNAPSHOT_NAME).val
+		return Res(s.push(SUBVOLUME, snapshot, REMOTE_SUBVOLUME, PARENT, CLONESRCS).val)
 
 
 
@@ -264,7 +269,7 @@ class Bfg:
 		
 
 
-	def local_commit(s, SUBVOLUME='/', TAG=None, SNAPSHOT=None):
+	def local_commit(s, SUBVOLUME='/', TAG=None, SNAPSHOT=None, SNAPSHOT_NAME=None):
 		"""
 		come up with a filesystem path for a snapshot, and snapshot SUBVOLUME.
 		:param SNAPSHOT: override default filesystem path where snapshot will be created
@@ -273,11 +278,17 @@ class Bfg:
 		if TAG and SNAPSHOT:
 			_prerr(f'please specify SNAPSHOT or TAG, not both')
 			return -1
+		if TAG and SNAPSHOT_NAME:
+			_prerr(f'please specify SNAPSHOT_NAME or TAG, not both')
+			return -1
+		if SNAPSHOT and SNAPSHOT_NAME:
+			_prerr(f'please specify SNAPSHOT_NAME or SNAPSHOT, not both')
+			return -1
 		SUBVOLUME = Path(SUBVOLUME).absolute()
 		if SNAPSHOT is not None:
 			SNAPSHOT = Path(SNAPSHOT).absolute()
 		else:
-			SNAPSHOT = s.calculate_default_snapshot_path(SUBVOLUME, TAG).val
+			SNAPSHOT = s.calculate_default_snapshot_path(SUBVOLUME, TAG, SNAPSHOT_NAME).val
 		s._local_make_ro_snapshot(SUBVOLUME, SNAPSHOT)
 		return Res(SNAPSHOT)
 

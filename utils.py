@@ -45,9 +45,7 @@ class VolWalker:
 		logging.debug('walk ' + repr(my_uuid))
 
 		if my_uuid not in s.by_uuid:
-			# the show almost stops here, but only almost. We could still look up all subvols that have this uuid as a parent/received uuid, and pursue those. It wouldn't be known if the missing subvol was ro or rw, so, these could be presented as only the last options to try for -p, or only as a -c or something.
-			
-			# another todo thing is that when we run into an rw subvol, we assume that it might have been modified, so it simply doesnt form a ro-chain, but idk how btrfs looks at this, maybe if there were actually no modifications, it'd keep a constant gen id, and a ro child snapshot of it could be used?
+			# the show almost stops here, but only almost. We could still look up all subvols that have this uuid as a parent/received uuid, and pursue those. It wouldn't be known if the missing subvol was ro or rw, so, these could be presented as only the last case options to try.
 			
 			return
 
@@ -108,7 +106,8 @@ class VolWalker:
 
 		# at any case, if the read-only-ness chain is broken,
 		# the subvol or its descendants are of no use.
-		# Or again, use as last-instance options?
+		# idk how btrfs looks at this, maybe if there were actually no modifications, it'd keep a constant gen id, and a ro child snapshot of it could be used? # nope, see tests/negative/test2.sh
+
 		if v['ro'] == False:
 			return
 		else:
