@@ -1,6 +1,8 @@
 # BFG
-Work in progress.
 B-tree Filesystem Git attempts to enable git-like workflow for subvolumes. Commit, push, checkout, stash, pull..
+
+## status
+Undertested work in progress, but `commit_and_push_and_checkout` and `remote_commit_and_pull`, as well as other commands, work.
 
 ## why
 I built this because my scenario is not just simple backup, but also transfering subvolumes back and forth between multiple machines, where no one machine is a single source of truth. In other words, a desktop computer and a notebook, and a subvol with a bunch of VM images. And then maybe a bunch of external backup HDDs. 
@@ -30,11 +32,26 @@ I built this because my scenario is not just simple backup, but also transfering
 
 
 ## example workflow
-this is how i ping-pong the changes to my data between my two machines:
+this is how i ping-pong my data between my two machines:
 ```
-./main.py   --YES=true    --LOCAL_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=/nvme0n1p6_crypt_root    --sshstr='/opt/hpnssh/usr/bin/ssh   -p 2222   -o TCPRcvBufPoll=yes -o NoneSwitch=yes  -o NoneEnabled=yes     koom@10.0.0.20'    commit_and_push_and_checkout   --SUBVOLUME=/d  --REMOTE_SUBVOLUME=/mx500data/lean
+./main.py   \
+  --YES=true  \  #  no confirmations
+  --LOCAL_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=/nvme0n1p6_crypt_root  \  # ugly hack
+  --sshstr='/opt/hpnssh/usr/bin/ssh   -p 2222   -o TCPRcvBufPoll=yes -o NoneSwitch=yes  -o NoneEnabled=yes     koom@10.0.0.20'  \
+  commit_and_push_and_checkout  \  # the command
+  --SUBVOLUME=/d \  # source
+  --REMOTE_SUBVOLUME=/mx500data/lean  # target
 ```
-and back:
+...this:
+* makes a read-only snapshot of /d/ in /.bfg_snapshots.d/<timestamp>_from_<hostname>
+* finds the best shared parent and sends the snapshot to the other machine over ssh
+* receives it on the other machine in /mx500data/.bfg_snapshots.lean
+* makes a read-only snapshot of /mx500data/lean in /mx500data/.bfg_snapshots.lean/<timestamp>_stash
+* deletes /mx500data/lean
+* makes a read-write snapshot of the received snapshot, in /mx500data/lean
+
+ 
+And back:
 ```
 ./main.py   --YES=true    --REMOTE_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=/mx500data    --sshstr='/opt/hpnssh/usr/bin/ssh   -p 2222   -o TCPRcvBufPoll=yes -o NoneSwitch=yes  -o NoneEnabled=yes     koom@10.0.0.20'   remote_commit_and_pull   --SUBVOLUME=/d  --REMOTE_SUBVOLUME=/mx500data/lean
 ```
