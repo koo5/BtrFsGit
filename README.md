@@ -2,18 +2,18 @@
 B-tree Filesystem Git attempts to enable git-like workflow for subvolumes. Commit, push, checkout, stash, pull..
 
 <p align="center">
-<a href="https://pypi.python.org/pypi/bfg">
-    <img src="https://img.shields.io/pypi/v/bfg.svg"
+<a href="https://pypi.python.org/pypi/btrfsgit">
+    <img src="https://img.shields.io/pypi/v/btrfsgit.svg"
         alt = "Release Status">
 </a>
 
-<a href="https://bfg.readthedocs.io/en/latest/?badge=latest">
-    <img src="https://readthedocs.org/projects/bfg/badge/?version=latest" alt="Documentation Status">
+<a href="https://btrfsgit.readthedocs.io/en/latest/?badge=latest">
+    <img src="https://readthedocs.org/projects/btrfsgit/badge/?version=latest" alt="Documentation Status">
 </a>
 
 </p>
 
-* Documentation: <https://bfg.readthedocs.io>
+* Documentation: <https://btrfsgit.readthedocs.io>
 
 
 ## user install:

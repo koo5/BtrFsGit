@@ -316,7 +316,7 @@ class Bfg:
 				
 	def push(s, SUBVOLUME, SNAPSHOT, REMOTE_SUBVOLUME, PARENT=None, CLONESRCS=[]):
 		"""
-		Try to figure out shared parents, if not provided.
+		Try to figure out shared parents, if not provided, and send SNAPSHOT to the other side.
 
 		todo: subvolume is probably not needed and fs_root_mount_point can be used?
 		

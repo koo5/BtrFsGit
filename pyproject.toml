@@ -1,20 +1,18 @@
 [tool]
 [tool.poetry]
-name = "bfg"
-version = "0.0.9"
+name = "BtrFsGit"
+version = "90.0.0"
 homepage = "https://github.com/koo5/bfg"
 description = "B-tree Filesystem Git attempts to enable git-like workflow for BTRFS subvolumes. Commit, push, checkout, stash, pull..."
-authors = ["koo5 <koo5>"]
+authors = ["koo5 <kolman.jindrich@gmail.com>"]
 readme = "README.md"
-license =  "GPL-3.0-only"
+license =  "GNU Affero General Public License v3 or later (AGPLv3+)"
 classifiers=[
-    'Development Status :: 2 - Pre-Alpha',
+    'Development Status :: 3 - Alpha',
     'Intended Audience :: Developers',
-    'License :: OSI Approved :: GNU General Public License v3 (GPLv3)',
+    'License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)',
     'Natural Language :: English',
     'Programming Language :: Python :: 3',
-    'Programming Language :: Python :: 3.6',
-    'Programming Language :: Python :: 3.7',
     'Programming Language :: Python :: 3.8',
     'Programming Language :: Python :: 3.9',
 ]
@@ -24,7 +22,7 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.6.1,<4.0"
+python = ">=3.8.1,<4.0"
 fire = "0.4.0"
 
 black  = { version = "20.8b1", optional = true}
