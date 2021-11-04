@@ -7,14 +7,6 @@ B-tree Filesystem Git attempts to enable git-like workflow for subvolumes. Commi
         alt = "Release Status">
 </a>
 
-<a href="https://btrfsgit.readthedocs.io/en/latest/?badge=latest">
-    <img src="https://readthedocs.org/projects/btrfsgit/badge/?version=latest" alt="Documentation Status">
-</a>
-
-</p>
-
-* Documentation: <https://btrfsgit.readthedocs.io>
-
 
 ## user install:
 ```pip install --user BtrFsGit```
@@ -90,7 +82,7 @@ see also:
 [test1](tests/test1.sh)
 
 ## available commands
-[docs](docs/)
+[docs](docs/bfg/bfg.md)
 
 ## prerequisites
 

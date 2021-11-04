@@ -2,7 +2,7 @@
 
 
 """
-python 3.8 required (at least for shlex.join)
+The Big Friendly F.....g Gun!
 """
 
 
@@ -14,7 +14,7 @@ import sys,os
 import time
 import subprocess
 import fire
-import shlex
+import shlex # python 3.8 required (at least for shlex.join)
 from typing import List
 from PyInquirer import prompt
 import json
