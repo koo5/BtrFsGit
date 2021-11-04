@@ -25,7 +25,7 @@ poetry install # only installs the executable into somewhere like `/.cache/pypoe
 Undertested, but `commit_and_push_and_checkout`, `remote_commit_and_pull` and other commands work.
 
 ## why
-I built this because my scenario is not just simple backup, but also transfering subvolumes back and forth between multiple machines, where no one machine is a single source of truth. In other words, a desktop computer and a notebook, and a subvol with a bunch of VM images. And then maybe a bunch of external backup HDDs. 
+I built this because my scenario is not just simple backup, but also transfering subvolumes back and forth between multiple machines, where no one machine is a single source of truth. In other words, a desktop computer and a notebook, and a subvol with a bunch of VM images. And then maybe a bunch of external backup HDDs.
 
 ## cool features
 * It tries to figure out shared parents smartly, by walking the uuids of subvolumes of both filesystems. It doesn't just expect the last transferred snapshot to "be there", in a fixed location, like other tools do.
@@ -33,11 +33,12 @@ I built this because my scenario is not just simple backup, but also transfering
 
 ## what this doesn's do (yet?)
 * snapshot pruning
-* cleanup after failure
+* cleanup after failure / .tmp destination
+* finding shared parent by simply listing the snapshots dirs
 * config files
 
-## what this isn't yet
-* a proper python package that you can install into your $PATH
+## todo
+* what happens when there is only an incomplete snapshot on target?
 
 ## planned features
 * automatically saving and propagating `sub list` dumps - to allow finding shared parents also for offine generating of send streams, even across multiple machine hops
@@ -70,7 +71,7 @@ this is how i ping-pong my data between my two machines:
 * deletes /mx500data/lean
 * makes a read-write snapshot of the received snapshot, in /mx500data/lean
 
- 
+
 And back:
 ```
 ./main.py   --YES=true    --REMOTE_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=/mx500data    --sshstr='/opt/hpnssh/usr/bin/ssh   -p 2222   -o TCPRcvBufPoll=yes -o NoneSwitch=yes  -o NoneEnabled=yes     koom@10.0.0.20'   remote_commit_and_pull   --SUBVOLUME=/d  --REMOTE_SUBVOLUME=/mx500data/lean
@@ -90,8 +91,8 @@ see also:
 This isnt a proper python package yet. Python3.8 is expected. Checkout the repo, do
 ```
  virtualenv -p /usr/bin/python3.8 venv
- pip install -r requirements.txt 
- 
+ pip install -r requirements.txt
+
 ```
 ### mount the root
 #### problem
