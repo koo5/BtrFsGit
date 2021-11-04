@@ -118,7 +118,7 @@ class Bfg:
 		return Res(str(Path(str(Path(SUBVOLUME).parent) + '/.bfg_snapshots.' + Path(SUBVOLUME).parts[-1]).absolute()))
 
 
-	def calculate_default_snapshot_path(s, SUBVOLUME, TAG, NAME_OVERRIDE): #, TAG2):
+	def calculate_default_snapshot_path(s, SUBVOLUME, TAG, NAME_OVERRIDE=None): #, TAG2):
 		"""
 		calculate the filesystem path where a snapshot should go, given a subvolume and a tag
 		"""
