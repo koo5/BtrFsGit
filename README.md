@@ -22,7 +22,7 @@ poetry install # only installs the executable into somewhere like `/.cache/pypoe
 
 
 ## status
-Undertested, but `commit_and_push_and_checkout`, `remote_commit_and_pull` and other commands work.
+Undertested, but `commit_and_push_and_checkout`, `remote_commit_and_pull` and other commands work. python-fire (the CLI lib) behaves in unexpected ways sometimes. Data loss could occur ;)
 
 ## why
 I built this because my scenario is not just simple backup, but also transfering subvolumes back and forth between multiple machines, where no one machine is a single source of truth. In other words, a desktop computer and a notebook, and a subvol with a bunch of VM images. And then maybe a bunch of external backup HDDs.
@@ -55,7 +55,7 @@ I built this because my scenario is not just simple backup, but also transfering
 ## example workflow
 this is how i ping-pong my data between my two machines:
 ```
-./main.py   \
+bfg   \
   --YES=true  \  #  no confirmations
   --LOCAL_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=/nvme0n1p6_crypt_root  \  # ugly hack
   --sshstr='/opt/hpnssh/usr/bin/ssh   -p 2222   -o TCPRcvBufPoll=yes -o NoneSwitch=yes  -o NoneEnabled=yes     koom@10.0.0.20'  \
@@ -74,7 +74,7 @@ this is how i ping-pong my data between my two machines:
 
 And back:
 ```
-./main.py   --YES=true    --REMOTE_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=/mx500data    --sshstr='/opt/hpnssh/usr/bin/ssh   -p 2222   -o TCPRcvBufPoll=yes -o NoneSwitch=yes  -o NoneEnabled=yes     koom@10.0.0.20'   remote_commit_and_pull   --SUBVOLUME=/d  --REMOTE_SUBVOLUME=/mx500data/lean
+bfg   --YES=true    --REMOTE_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=/mx500data    --sshstr='/opt/hpnssh/usr/bin/ssh   -p 2222   -o TCPRcvBufPoll=yes -o NoneSwitch=yes  -o NoneEnabled=yes     koom@10.0.0.20'   remote_commit_and_pull   --SUBVOLUME=/d  --REMOTE_SUBVOLUME=/mx500data/lean
 ```
 full output:
 [example_session.md](misc/example_session.md)

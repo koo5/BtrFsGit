@@ -147,12 +147,12 @@ class Bfg:
 
 
 	"""
-		
+
 	high-level, compound commands
-	
+
 	"""
 
-	def commit_and_push_and_checkout(s, SUBVOLUME, REMOTE_SUBVOLUME, PARENTS:List[str]=None):
+	def commit_and_push_and_checkout(s, SUBVOLUME, REMOTE_SUBVOLUME, PARENT:str=None):
 		"""
 		Snapshot your data, "btrfs send"/"btrfs receive" the snapshot to the other machine, and checkout it there
 
@@ -161,7 +161,7 @@ class Bfg:
 		:param REMOTE_SUBVOLUME: desired filesystem path of your data on the other machine
 		:return: filesystem path of the snapshot created on the other machine
 		"""
-		remote_snapshot_path = s.commit_and_push(SUBVOLUME, REMOTE_SUBVOLUME, PARENTS).val
+		remote_snapshot_path = s.commit_and_push(SUBVOLUME, REMOTE_SUBVOLUME, PARENT=PARENT).val
 		s.checkout_remote(remote_snapshot_path, REMOTE_SUBVOLUME)
 		return Res(REMOTE_SUBVOLUME)
 
@@ -199,7 +199,7 @@ class Bfg:
 		_prerr(f'DONE, generated patch \n\tfrom {snapshot} \n\tinto {fn}\n.')
 		return Res(fn)
 
-		
+
 
 	def commit_and_push(s, SUBVOLUME, REMOTE_SUBVOLUME, SNAPSHOT_TAG=None, SNAPSHOT_PATH=None, SNAPSHOT_NAME=None, PARENT=None, CLONESRCS:List[str]=[]):
 		"""commit, and transfer the snapshot into .bfg_snapshots on the other machine"""
@@ -210,8 +210,8 @@ class Bfg:
 
 
 	"""
-	
-	
+
+
 	basic commands
 	"""
 
@@ -230,7 +230,7 @@ class Bfg:
 		s._remote_cmd(f'btrfs subvolume snapshot {SNAPSHOT} {SUBVOLUME}')
 		_prerr(f'DONE {s._remote_str}, \n\tchecked out {SNAPSHOT} \n\tinto {SUBVOLUME}\n.')
 		return Res(SUBVOLUME)
-		
+
 
 	def stash_local(s, SUBVOLUME, SNAPSHOT_TAG = 'stash', SNAPSHOT_NAME=None):
 		"""
@@ -266,7 +266,7 @@ class Bfg:
 
 			_prerr(f'DONE {s._remote_str}, \n\tsnapshotted {SUBVOLUME} \n\tinto {snapshot}\n, and deleted it.')
 			return Res(snapshot)
-		
+
 
 
 	def local_commit(s, SUBVOLUME='/', TAG=None, SNAPSHOT=None, SNAPSHOT_NAME=None):
@@ -313,13 +313,13 @@ class Bfg:
 		return Res(SNAPSHOT)
 
 
-				
+
 	def push(s, SUBVOLUME, SNAPSHOT, REMOTE_SUBVOLUME, PARENT=None, CLONESRCS=[]):
 		"""
 		Try to figure out shared parents, if not provided, and send SNAPSHOT to the other side.
 
 		todo: subvolume is probably not needed and fs_root_mount_point can be used?
-		
+
 		"""
 		snapshot_parent = s.calculate_default_snapshot_parent_dir(Path(REMOTE_SUBVOLUME)).val
 		s._remote_cmd(['mkdir', '-p', str(snapshot_parent)])
@@ -355,7 +355,7 @@ class Bfg:
 
 
 	"""
-	
+
 	low-level operations
 	"""
 
