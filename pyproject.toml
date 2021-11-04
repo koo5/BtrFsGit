@@ -1,7 +1,7 @@
 [tool]
 [tool.poetry]
 name = "BtrFsGit"
-version = "90.0.0"
+version = "9000.0.1"
 homepage = "https://github.com/koo5/bfg"
 description = "B-tree Filesystem Git attempts to enable git-like workflow for BTRFS subvolumes. Commit, push, checkout, stash, pull..."
 authors = ["koo5 <kolman.jindrich@gmail.com>"]
