@@ -37,8 +37,8 @@ I built this because my scenario is not just simple backup, but also transfering
 * finding shared parent by simply listing the snapshots dirs
 * config files
 
-## todo
-* what happens when there is only an incomplete snapshot on target?
+## current todo
+* what happens when there is only an incomplete snapshot on target? it should be rw, so the receive should fail. Do we want to get into ensuring that a snapshot is complete before using it? This sounds more like snazzer territory, but otoh, we can at least refuse to use .tmp's by default? 
 
 ## planned features
 * automatically saving and propagating `sub list` dumps - to allow finding shared parents also for offine generating of send streams, even across multiple machine hops
