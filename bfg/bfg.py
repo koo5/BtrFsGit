@@ -458,14 +458,15 @@ class Bfg:
 
 	def _parent_candidates_by_path(s, subvolume, remote_subvolume, all_subvols, my_uuid, direction):
 
-		subvolume = subvol_abs_path(subvolume)
-		remote_subvolume = subvol_abs_path(remote_subvolume)
+		# if subvolume or remote_subvolume is not an absolute sv5-mountpoint path,..
+		subvolume = s.subvol_abs_path(subvolume)
+		remote_subvolume = s.subvol_abs_path(remote_subvolume)
 
 
 		for k,v in all_subvols.items():
 			if not v['ro']: continue
 			if not v['machine'] == 'local': continue
-			# if subvolume, remote_subvolume is not an absolute sv5-mountpoint path,
+
 
 
 	def subvol_abs_path(subvol_path):
