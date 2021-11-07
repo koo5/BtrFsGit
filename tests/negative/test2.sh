@@ -22,7 +22,7 @@ set -x
 
 
 # create ro "s1" from "subvol1" and send it to the other side
-./main.py  --LOCAL_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=testing/mounts/btrfs1  commit_and_push   --SUBVOLUME=testing/mounts/btrfs1/subvol1 --REMOTE_SUBVOLUME=testing/mounts/btrfs2/subvol1  --SNAPSHOT_NAME=s1
+./bfg  --LOCAL_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=testing/mounts/btrfs1  commit_and_push   --SUBVOLUME=testing/mounts/btrfs1/subvol1 --REMOTE_SUBVOLUME=testing/mounts/btrfs2/subvol1  --SNAPSHOT_NAME=s1
 
 # create rw "s1_rw_snap" from "s1"
 sudo btrfs subvolume snapshot testing/mounts/btrfs1/.bfg_snapshots.subvol1/s1 testing/mounts/btrfs1/s1_rw_snap
@@ -35,5 +35,5 @@ sudo btrfs subvolume snapshot -r testing/mounts/btrfs1/s1_rw_snap testing/mounts
 
 # is "s1_ro_snap" a good parent for sending a snapshot of "subvol1" again?
 # BFG wouldn't try this
-./main.py  --LOCAL_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=testing/mounts/btrfs1  commit_and_push   --SUBVOLUME=testing/mounts/btrfs1/subvol1 --REMOTE_SUBVOLUME=testing/mounts/btrfs2/subvol1  --PARENT='testing/mounts/btrfs1/s1_ro_snap'
+./bfg  --LOCAL_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=testing/mounts/btrfs1  commit_and_push   --SUBVOLUME=testing/mounts/btrfs1/subvol1 --REMOTE_SUBVOLUME=testing/mounts/btrfs2/subvol1  --PARENT='testing/mounts/btrfs1/s1_ro_snap'
 

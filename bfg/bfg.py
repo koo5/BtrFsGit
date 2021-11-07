@@ -417,24 +417,77 @@ class Bfg:
 			_prerr('exit code ' + str(p2.returncode))
 			exit(1)
 
+	def _top_subvol_mount_pount(path):
+		"""
+		untested but this should remote the need to specify TOP_LEVEL_SUBVOL_MOUNT_POINT.
+		"""
+		fs_device = cmd(['df', 'path']).readlines()[1].split()[0]
+		with open('/proc/mounts') as mounts:
+			for mount_line in mounts.readlines():
+				mount = mount_line.split()
+				if mount[0] == fs_device:
+					options0 = mount[3]
+					options1 = options0.split(',')
+					for o in options1:
+						if o == 'subvol=/':
+							return mount[1]
+
 
 
 	def find_common_parent(s, subvolume, remote_subvolume, my_uuid, direction):
-		candidates = s.parent_candidates(subvolume, remote_subvolume, my_uuid, direction).val
-		#candidates.sort(key = lambda sv: sv['subvol_id']) # nope, subvol id is a crude approximation. What happens when you snapshot and old ro snapshot? It gets the highest id.
-		if len(candidates) != 0:
-			winner = candidates[0]
-			s._add_abspath(winner)
-			_prerr(f'PICKED COMMON PARENT {winner}.')
-			return Res(winner)
-		else:
-			return Res(None)
+		winner = s._find_common_parent2(s, subvolume, remote_subvolume, my_uuid, direction)
+		_prerr(f'DETERMINED COMMON PARENT: {winner}.')
+		s._add_abspath(winner)
+		return winner
+
+
+	def _find_common_parent2(s, subvolume, remote_subvolume, my_uuid, direction):
+		all_subvols = s.all_subvols_by_uuid(s, subvolume, remote_subvolume)
+		by_uuid_walking = s._parent_candidates_by_uuid_walking(all_subvols, my_uuid, direction)
+		if len(by_uuid_walking) != 0:
+			return Res(by_uuid_walking[0])
+ 		_prerr(f'looking up shared parents by walking UUIDs failed.')
+
+		by_path = s._parent_candidates_by_path(subvolume, remote_subvolume, all_subvols, my_uuid, direction).val
+		if len(by_path) != 0:
+			return Res(by_path[0])
+ 		_prerr(f'looking up shared parents by filesystem path failed.')
+
+
+		return Res(None)
+
+	def _parent_candidates_by_path(s, subvolume, remote_subvolume, all_subvols, my_uuid, direction):
+
+		# if subvolume or remote_subvolume is not an absolute sv5-mountpoint path,..
+		subvolume = s.subvol_abs_path(subvolume)
+		remote_subvolume = s.subvol_abs_path(remote_subvolume)
+
+
+		for k,v in all_subvols.items():
+			if not v['ro']: continue
+			if not v['machine'] == 'local': continue
+
+
+
+	def subvol_abs_path(subvol_path):
+		subvol_id = int(cmd('btrfs', 'ins', 'rootid', subvol_path))
+		r = subvol_record_by_id(all_subvols, subvol_id)
+		s._add_abspath(r)
+		return r['abspath']
+
+
 
 	def _add_abspath(s, subvol_record):
 		if subvol_record['machine'] == 'remote':
 			s._remote_add_abspath(subvol_record)
 		else:
 			s._local_add_abspath(subvol_record)
+
+
+
+
+
+
 
 	def _local_add_abspath(s, subvol_record):
 		if s._local_fs_id5_mount_point is None:
@@ -459,18 +512,46 @@ class Bfg:
 		subvol_record['abspath'] = s._remote_fs_id5_mount_point + '/' + s._remote_cmd(['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), s._remote_fs_id5_mount_point]).strip()
 
 
-	def parent_candidates(s, subvolume, remote_subvolume, my_uuid, direction):
+
+
+	# ^ refactor these two
+	# if runner == s._remote_cmd:
+	#
+	# _remote_fs_id5_mount_point becomes a memoized property
+
+	# allow functioning without subvol5 mounted, but dont record abspath? this might be useful if we dont allow it on one machine but at least allow it on the other maybe? Dont need to have it mounted on receiver, if i determine parents by uuid or by simple fs path
+
+	# "if btrfs sub list would print an absolute, complete and reliable path of each subvolume, in a consistent way"
+	# abspath might better be named topvol_absolute_fs_path and ideally we'd care more about the part after the mount point path, to abstract away from concrete mount points?
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	def _parent_candidates_by_uuid_walking(s, all_subvols, my_uuid, direction):
 		candidates = []
-		for c in s._parent_candidates(subvolume, remote_subvolume, my_uuid, direction):
+		for c in VolWalker(all_subvols, direction).walk(my_uuid):
 			candidates.append(c)
-			_prerr('shared parent: ' + c['local_uuid'])
-		return Res(candidates)
+			_prerr('shared parent found by walking UUIDs: ' + c['local_uuid'])
+		return (candidates)
 
 
-	def _parent_candidates(s, subvolume, remote_subvolume, my_uuid, direction):
+	def all_subvols_by_uuid(s, subvolume, remote_subvolume):
 
-		remote_subvols = _get_subvolumes(s._remote_cmd, remote_subvolume)
-		local_subvols = _get_subvolumes(s._local_cmd, subvolume)
+		#remote_subvols = _get_subvolumes(s._remote_cmd, remote_subvolume, is_sv5=False) ..
+		#local_subvols = _get_subvolumes(s._local_cmd, subvolume, is_sv5=False) ...
+
+		remote_subvols = _get_subvolumes(s._remote_cmd, s._remote_fs_id5_mount_point)
+		local_subvols = _get_subvolumes(s._local_cmd, s._local_fs_id5_mount_point)
 		other_subvols = load_subvol_dumps()
 
 		all_subvols = []
@@ -490,48 +571,49 @@ class Bfg:
 				raise 'wut'
 			all_subvols2[i['local_uuid']] = i
 
-
-		yield from VolWalker(all_subvols2, direction).walk(my_uuid)
-
+		return all_subvols2
 
 
 
-def _get_subvolumes(command_runner, subvolume):
+
+
+def _get_subvolumes(command_runner, subvolume, is_sv5=True):
 	"""
-	:param subvolume: filesystem path to a subvolume on the filesystem that we want to get a list of subvolumes of
+	:param subvolume: filesystem path to the filesystem that we want to get a list of subvolumes of
 	:return: list of subvolume records
 	"""
+
 	subvols = []
 	cmd = ['btrfs', 'subvolume', 'list', '-q', '-t', '-R', '-u']
 	for line in command_runner(cmd + [subvolume]).splitlines()[2:]:
-		subvol = _make_snapshot_struct_from_sub_list_output_line(line)
+		subvol = _make_snapshot_struct_from_sub_list_output_line(line, is_sv5)
 		subvols.append(subvol)
 
+
+
+	# mark read-only subvols
 	ro_subvols = set()
 	for line in command_runner(cmd + ['-r', subvolume]).splitlines()[2:]:
-		subvol = _make_snapshot_struct_from_sub_list_output_line(line)
+		subvol = _make_snapshot_struct_from_sub_list_output_line(line, is_sv5)
 		ro_subvols.add(subvol['local_uuid'])
-	#_prerr(str(ro_subvols))
-
 	for i in subvols:
-		ro = i['local_uuid'] in ro_subvols
-		i['ro'] = ro
-		#_prerr(str(i))
+		i['ro'] = i['local_uuid'] in ro_subvols
+
+
 
 	subvols.sort(key = lambda sv: -sv['subvol_id'])
 	return subvols
 
 
 
-def _make_snapshot_struct_from_sub_list_output_line(line):
+def _make_snapshot_struct_from_sub_list_output_line(line, is_sv5):
 	#logging.debug(line)
 	items = line.split()
-	subvol_id = items[0]
-	parent_uuid = items[3]
-	received_uuid = items[4]
-	local_uuid = items[5]
 
 	snapshot = {}
+
+	parent_uuid = items[3]
+	received_uuid = items[4]
 
 	if received_uuid == '-':
 		received_uuid = None
@@ -540,8 +622,12 @@ def _make_snapshot_struct_from_sub_list_output_line(line):
 
 	snapshot['received_uuid'] = received_uuid
 	snapshot['parent_uuid'] = parent_uuid
-	snapshot['local_uuid'] = local_uuid
-	snapshot['subvol_id'] = int(subvol_id)
+	snapshot['local_uuid'] = items[5]
+	snapshot['subvol_id'] = int(items[0])
+
+	# could be omitted if you dont want to mount subvol5. Otherwise is assumed to be the path relative to subvol5 mount point. This means that you should be sub list'ing the mountpoint. "-a" appears to be total garbage too.
+	if is_sv5:
+		snapshot['sv5_path'] = items[6]
 
 	return snapshot
 
