@@ -16,10 +16,6 @@ BFG stands for "B-tree Filesystem Git". It borrows git concepts for operations o
 * finding shared parent by simply listing the snapshots dirs
 * config files - for configuring your "remotes", for example.
 
-
-## current todo
-* what happens when there is only an incomplete snapshot on target? it should be rw, so the receive should fail. Do we want to get into ensuring that a snapshot is complete before using it? This sounds more like snazzer territory, but otoh, we can at least refuse to use .tmp's by default?
-
 ## planned features
 * automatically saving and propagating `sub list` dumps - to allow finding shared parents also for offine generating of send streams, even across multiple machine hops
 * Generating a send stream, and applying it later.
@@ -37,8 +33,9 @@ BFG stands for "B-tree Filesystem Git". It borrows git concepts for operations o
 
 
 ## install:
-```pip install --user btrfsgit```
-
+```
+pip install --user btrfsgit
+```
 
 ## example workflow
 
@@ -61,8 +58,9 @@ bfg   \
 * makes a read-write snapshot of the received snapshot, as /mx500data/lean
 
 
-And back: `bfg --sshstr=$SSHSTR remote_commit_and_pull --SUBVOLUME=/d --REMOTE_SUBVOLUME=/mx500data/lean`
-
+And back: ```
+bfg --sshstr=$SSHSTR remote_commit_and_pull --SUBVOLUME=/d --REMOTE_SUBVOLUME=/mx500data/lean
+```
 
 in this case my SSHSTR = `'/opt/hpnssh/usr/bin/ssh  -p 2222  -o TCPRcvBufPoll=yes -o NoneSwitch=yes -o NoneEnabled=yes  koom@10.0.0.20"`
 
@@ -106,3 +104,7 @@ pip install --user poetry
 poetry install # only installs the executable into somewhere like `/.cache/pypoetry/virtualenvs/bfg-iXQCHChq-py3.6/bin/`. It just doesn't have a "development mode" like setuptools have with `pip install -e .`. So find that directory, and copy the `bfg` into your `~/.local/bin/`. But that's about to be [fixed soon](https://github.com/python-poetry/poetry/issues/34).
 ```
 
+## current todo
+* what happens when there is only an incomplete snapshot on target? it should be rw, so the receive should fail. Do we want to get into ensuring that a snapshot is complete before using it? This sounds more like snazzer territory, but otoh, we can at least refuse to use .tmp's by default?
+
+* should we optionally store a history inside each subvol, say, `.bfg_parents.json`? Basically, every snapshot created off a subvolume would have its UUID recorded in a list. This would be another way to track down shared parents.
