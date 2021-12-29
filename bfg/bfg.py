@@ -23,7 +23,7 @@ from .utils import *
 
 
 
-logging.basicConfig(level=logging.DEBUG)
+#logging.basicConfig(level=logging.DEBUG)
 
 
 
@@ -548,7 +548,8 @@ def _make_snapshot_struct_from_sub_list_output_line(line):
 
 
 def _prerr(*a):
-	print(*a, file = sys.stderr)
+	#print(*a, file = sys.stderr)
+	pass
 
 
 def main():
