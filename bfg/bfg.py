@@ -115,7 +115,7 @@ class Bfg:
 		SUBVOLUME: your subvolume (for example /data).
 		Calculate the default snapshot parent dir. In the filesystem tree, it is on the same level as your subvolume, for example `/.bfg_snapshots.data`
 		"""
-		return Res(str(Path(str(Path(SUBVOLUME).parent) + '/.bfg_snapshots.' + Path(SUBVOLUME).parts[-1]).absolute()))
+		return Res(str(Path(str(Path(SUBVOLUME).parent) + '/.bfg_snapshots/.bfg_snapshots.' + Path(SUBVOLUME).parts[-1]).absolute()))
 
 
 	def calculate_default_snapshot_path(s, SUBVOLUME, TAG, NAME_OVERRIDE=None): #, TAG2):
