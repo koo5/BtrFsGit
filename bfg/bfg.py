@@ -16,7 +16,6 @@ import subprocess
 import fire
 import shlex # python 3.8 required (at least for shlex.join)
 from typing import List
-from PyInquirer import prompt
 import json
 from .utils import *
 
@@ -26,6 +25,13 @@ from .utils import *
 #logging.basicConfig(level=logging.DEBUG)
 
 
+
+def prompt(*args, **kwargs):
+	try:
+		import PyInquirer
+	except:
+		print('`import PyInquirer` failed. PyInquirer is needed for interactive prompts.')
+	return PyInquirer.prompt(*args, **kwargs)
 
 class Bfg:
 
