@@ -121,7 +121,7 @@ class Bfg:
 		SUBVOLUME: your subvolume (for example /data).
 		Calculate the default snapshot parent dir. In the filesystem tree, it is on the same level as your subvolume, for example `/.bfg_snapshots.data`
 		"""
-		return Res(str(Path(str(Path(SUBVOLUME).parent) + '/.bfg_snapshots/.bfg_snapshots.' + Path(SUBVOLUME).parts[-1]).absolute()))
+		return Res(str(Path(str(Path(SUBVOLUME).parent) + '/.bfg_snapshots/' + Path(SUBVOLUME).parts[-1] + '_bfg_snapshots').absolute()))
 
 
 	def calculate_default_snapshot_path(s, SUBVOLUME, TAG, NAME_OVERRIDE=None): #, TAG2):
@@ -142,7 +142,7 @@ class Bfg:
 				TAG = 'from_' + subprocess.check_output(['hostname'], text=True).strip()
 			name = ts + '_' + TAG
 
-		return Res(str(Path(str(parent) + '/' + name)))
+		return Res(str(Path(str(parent) + '_' + name)))
 
 
 	def get_subvol_uuid_by_path(s, runner, path):
@@ -459,7 +459,7 @@ class Bfg:
 			{
 			'type': 'input',
 			'name': 'path',
-			'message': "where did you mount the top level subvolume (ID 5, not your /@ root) on the remote machine? Yes this is silly but i really need it right now."
+			'message': "where did you mount the top level subvolume (ID 5, not your /@ root) on the remote machine? Yes this is silly but i really need to know."
 			}
 		)['path']
 		subvol_record['abspath'] = s._remote_fs_id5_mount_point + '/' + s._remote_cmd(['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), s._remote_fs_id5_mount_point]).strip()
@@ -554,7 +554,7 @@ def _make_snapshot_struct_from_sub_list_output_line(line):
 
 
 def _prerr(*a):
-	#print(*a, file = sys.stderr)
+	print(*a, file = sys.stderr)
 	pass
 
 
