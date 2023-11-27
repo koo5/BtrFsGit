@@ -30,7 +30,8 @@ def prompt(*args, **kwargs):
 	try:
 		import PyInquirer
 	except:
-		print('`import PyInquirer` failed. PyInquirer is needed for interactive prompts.')
+		print('`import PyInquirer` failed. PyInquirer is needed for interactive prompts:' + str(args) + ' ' + str(kwargs))
+		sys.exit(1)
 	return PyInquirer.prompt(*args, **kwargs)
 
 class Bfg:
@@ -116,19 +117,69 @@ class Bfg:
 	"""
 
 
-	def calculate_default_snapshot_parent_dir(s, SUBVOLUME):
+	def calculate_default_snapshot_parent_dir(s, machine: str, SUBVOLUME):
 		"""
 		SUBVOLUME: your subvolume (for example /data).
-		Calculate the default snapshot parent dir. In the filesystem tree, it is on the same level as your subvolume, for example `/.bfg_snapshots.data`
+		Calculate the default snapshot parent dir. In the filesystem tree, it is on the same level as your subvolume, for example `/.bfg_snapshots.data`, if that is still the same filesystem.
 		"""
-		return Res(str(Path(str(Path(SUBVOLUME).parent) + '/.bfg_snapshots/' + Path(SUBVOLUME).parts[-1] + '_bfg_snapshots').absolute()))
+		SUBVOLUME = Path(SUBVOLUME)
+		parent = SUBVOLUME.parent
+
+		# is parent the same filesystem as SUBVOLUME? if not, then SUBVOLUME is the top level subvolume, and we need to make the snapshot inside it, rather than outside.
+
+		if machine == 'local':
+			try:
+
+				s._local_cmd(['mkdir', '-p', str(SUBVOLUME)])
+
+				# hope to come up with a unique file names:
+				f1 = str(time.time())
+
+				s._local_cmd(['touch', str(SUBVOLUME/f1)])
+
+				try:
+					s._local_cmd(['cp', '--reflink', str(SUBVOLUME)/f1, str(parent)], die_on_error=False)
+					snapshot_parent_dir = parent
+				except:
+					snapshot_parent_dir = SUBVOLUME
+
+			finally:
+				#try_unlink(SUBVOLUME/f1)
+				#try_unlink(parent/f1)
+				pass
+
+		else:
+
+			try:
+
+				s._remote_cmd(['mkdir', '-p', str(SUBVOLUME)])
+
+				# hope to come up with a unique file names:
+				f1 = str(time.time())
+
+				s._remote_cmd(['touch', str(SUBVOLUME/f1)])
+
+				try:
+					s._remote_cmd(['cp', '--reflink', str(SUBVOLUME)/f1, str(parent)])
+					snapshot_parent_dir = parent
+				except:
+					snapshot_parent_dir = SUBVOLUME
+
+			finally:
+				#s._remote_cmd(['rm', str(SUBVOLUME)/f1], die_on_error=False)
+				#s._remote_cmd(['rm', str(parent)/f1], die_on_error=False)
+				pass
 
 
-	def calculate_default_snapshot_path(s, SUBVOLUME, TAG, NAME_OVERRIDE=None): #, TAG2):
+		return Res(str(Path(str(snapshot_parent_dir) + '/.bfg_snapshots/' + Path(SUBVOLUME).parts[-1] + '_bfg_snapshots').absolute()))
+
+
+
+	def calculate_default_snapshot_path(s, machine, SUBVOLUME, TAG, NAME_OVERRIDE=None): #, TAG2):
 		"""
 		calculate the filesystem path where a snapshot should go, given a subvolume and a tag
 		"""
-		parent = s.calculate_default_snapshot_parent_dir(SUBVOLUME).val
+		parent = s.calculate_default_snapshot_parent_dir(machine, SUBVOLUME).val
 
 		if NAME_OVERRIDE is not None:
 			name = NAME_OVERRIDE
@@ -143,6 +194,8 @@ class Bfg:
 			name = ts + '_' + TAG
 
 		return Res(str(Path(str(parent) + '_' + name)))
+
+
 
 
 	def get_subvol_uuid_by_path(s, runner, path):
@@ -248,7 +301,7 @@ class Bfg:
 			_prerr(f'nothing to stash {s._local_str}, {SUBVOLUME} doesn\'t exist.')
 			return None
 		else:
-			snapshot = s._local_make_ro_snapshot(SUBVOLUME, s.calculate_default_snapshot_path(SUBVOLUME, SNAPSHOT_TAG, SNAPSHOT_NAME).val)
+			snapshot = s._local_make_ro_snapshot(SUBVOLUME, s.calculate_default_snapshot_path('local', SUBVOLUME, SNAPSHOT_TAG, SNAPSHOT_NAME).val)
 
 			cmd = f'btrfs subvolume delete {SUBVOLUME}'
 			if not s._yes(cmd):
@@ -263,7 +316,7 @@ class Bfg:
 			_prerr(f'nothing to stash {s._remote_str}, {SUBVOLUME} doesn\'t exist.')
 			return None
 		else:
-			snapshot = s._remote_make_ro_snapshot(SUBVOLUME, s.calculate_default_snapshot_path(Path(SUBVOLUME), 'stash_before_remote_checkout').val)
+			snapshot = s._remote_make_ro_snapshot(SUBVOLUME, s.calculate_default_snapshot_path('remote', Path(SUBVOLUME), 'stash_before_remote_checkout').val)
 
 			cmd = f'btrfs subvolume delete {SUBVOLUME}'
 			if not s._yes(cmd):
@@ -294,7 +347,7 @@ class Bfg:
 		if SNAPSHOT is not None:
 			SNAPSHOT = Path(SNAPSHOT).absolute()
 		else:
-			SNAPSHOT = s.calculate_default_snapshot_path(SUBVOLUME, TAG, SNAPSHOT_NAME).val
+			SNAPSHOT = s.calculate_default_snapshot_path('local', SUBVOLUME, TAG, SNAPSHOT_NAME).val
 		s._local_make_ro_snapshot(SUBVOLUME, SNAPSHOT)
 		return Res(SNAPSHOT)
 
@@ -313,7 +366,7 @@ class Bfg:
 		if SNAPSHOT is not None:
 			SNAPSHOT = Path(SNAPSHOT).absolute()
 		else:
-			SNAPSHOT = s.calculate_default_snapshot_path(Path(REMOTE_SUBVOLUME), 'remote_commit', SNAPSHOT_NAME).val
+			SNAPSHOT = s.calculate_default_snapshot_path('remote', Path(REMOTE_SUBVOLUME), 'remote_commit', SNAPSHOT_NAME).val
 		s._remote_make_ro_snapshot(REMOTE_SUBVOLUME, SNAPSHOT)
 		_prerr(f'DONE {s._remote_str},\n\tsnapshotted {REMOTE_SUBVOLUME} \n\tinto {SNAPSHOT}\n.')
 		return Res(SNAPSHOT)
@@ -327,7 +380,7 @@ class Bfg:
 		todo: subvolume is probably not needed and fs_root_mount_point can be used?
 
 		"""
-		snapshot_parent = s.calculate_default_snapshot_parent_dir(Path(REMOTE_SUBVOLUME)).val
+		snapshot_parent = s.calculate_default_snapshot_parent_dir('remote', Path(REMOTE_SUBVOLUME)).val
 		s._remote_cmd(['mkdir', '-p', str(snapshot_parent)])
 
 		if PARENT is None:
@@ -342,7 +395,7 @@ class Bfg:
 
 
 	def pull(s, REMOTE_SNAPSHOT, LOCAL_SUBVOLUME, PARENT=None, CLONESRCS=[]):
-		local_snapshot_parent_dir = s.calculate_default_snapshot_parent_dir(Path(LOCAL_SUBVOLUME)).val
+		local_snapshot_parent_dir = s.calculate_default_snapshot_parent_dir('local', Path(LOCAL_SUBVOLUME)).val
 		s._local_cmd(['mkdir', '-p', str(local_snapshot_parent_dir)])
 
 		if PARENT is None:
@@ -552,6 +605,12 @@ def _make_snapshot_struct_from_sub_list_output_line(line):
 	return snapshot
 
 
+def try_unlink(f):
+	try:
+		os.unlink(f)
+	except FileNotFoundError:
+		pass
+
 
 def _prerr(*a):
 	print(*a, file = sys.stderr)
@@ -563,4 +622,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main() # pragma: no cover
+	main() # pragma: no cover
