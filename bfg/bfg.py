@@ -77,9 +77,11 @@ class Bfg:
 
 
 	def _remote_cmd(s, cmd, die_on_error=True):
-		"""potentionally remote command"""
+		"""potentially remote command"""
 		if not isinstance(cmd, list):
 			cmd = shlex.split(cmd)
+		else:
+			cmd = [str(x) for x in cmd]
 		if s._sshstr != '':
 			ssh = shlex.split(s._sshstr)
 			cmd2 = ssh + s._sudo + cmd
@@ -92,7 +94,7 @@ class Bfg:
 	def _local_cmd(s, c, die_on_error=True):
 		if not isinstance(c, list):
 			c = shlex.split(c)
-		c = s._sudo + c
+		c = s._sudo + [str(x) for x in c]
 		_prerr(shlex.join(c) + ' ...')
 		return s._cmd(c, die_on_error)
 
@@ -129,42 +131,34 @@ class Bfg:
 
 		if machine == 'local':
 			try:
-
 				s._local_cmd(['mkdir', '-p', str(SUBVOLUME)])
-
 				# hope to come up with a unique file names:
 				f1 = str(time.time())
-
 				s._local_cmd(['touch', str(SUBVOLUME/f1)])
-
 				try:
-					s._local_cmd(['cp', '--reflink', str(SUBVOLUME)/f1, str(parent)], die_on_error=False)
+					s._local_cmd(['cp', '--reflink', SUBVOLUME/f1, parent], die_on_error=False)
 					snapshot_parent_dir = parent
-				except:
+				except Exception as e:
+					_prerr(e)
+					_prerr(f'cp --reflink failed, trying to make snapshot inside {SUBVOLUME} instead of {parent}')
 					snapshot_parent_dir = SUBVOLUME
-
 			finally:
 				#try_unlink(SUBVOLUME/f1)
 				#try_unlink(parent/f1)
 				pass
-
 		else:
-
 			try:
-
 				s._remote_cmd(['mkdir', '-p', str(SUBVOLUME)])
-
 				# hope to come up with a unique file names:
 				f1 = str(time.time())
-
 				s._remote_cmd(['touch', str(SUBVOLUME/f1)])
-
 				try:
-					s._remote_cmd(['cp', '--reflink', str(SUBVOLUME)/f1, str(parent)])
+					s._remote_cmd(['cp', '--reflink', SUBVOLUME/f1, parent], die_on_error=False)
 					snapshot_parent_dir = parent
-				except:
+				except Exception as e:
+					_prerr(e)
+					_prerr(f'cp --reflink failed, trying to make snapshot inside {SUBVOLUME} instead of {parent}')
 					snapshot_parent_dir = SUBVOLUME
-
 			finally:
 				#s._remote_cmd(['rm', str(SUBVOLUME)/f1], die_on_error=False)
 				#s._remote_cmd(['rm', str(parent)/f1], die_on_error=False)
