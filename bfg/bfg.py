@@ -130,40 +130,18 @@ class Bfg:
 		# is parent the same filesystem as SUBVOLUME? if not, then SUBVOLUME is the top level subvolume, and we need to make the snapshot inside it, rather than outside.
 
 		if machine == 'local':
-			try:
-				s._local_cmd(['mkdir', '-p', str(SUBVOLUME)])
-				# hope to come up with a unique file names:
-				f1 = str(time.time())
-				s._local_cmd(['touch', str(SUBVOLUME/f1)])
-				try:
-					s._local_cmd(['cp', '--reflink', SUBVOLUME/f1, parent], die_on_error=False)
-					snapshot_parent_dir = parent
-				except Exception as e:
-					_prerr(e)
-					_prerr(f'cp --reflink failed, trying to make snapshot inside {SUBVOLUME} instead of {parent}')
-					snapshot_parent_dir = SUBVOLUME
-			finally:
-				#try_unlink(SUBVOLUME/f1)
-				#try_unlink(parent/f1)
-				pass
+			runner = s._local_cmd
 		else:
-			try:
-				s._remote_cmd(['mkdir', '-p', str(SUBVOLUME)])
-				# hope to come up with a unique file names:
-				f1 = str(time.time())
-				s._remote_cmd(['touch', str(SUBVOLUME/f1)])
-				try:
-					s._remote_cmd(['cp', '--reflink', SUBVOLUME/f1, parent], die_on_error=False)
-					snapshot_parent_dir = parent
-				except Exception as e:
-					_prerr(e)
-					_prerr(f'cp --reflink failed, trying to make snapshot inside {SUBVOLUME} instead of {parent}')
-					snapshot_parent_dir = SUBVOLUME
-			finally:
-				#s._remote_cmd(['rm', str(SUBVOLUME)/f1], die_on_error=False)
-				#s._remote_cmd(['rm', str(parent)/f1], die_on_error=False)
-				pass
-
+			runner = s._remote_cmd
+		runner(['mkdir', '-p', str(SUBVOLUME)])
+		# hope to come up with a unique file names:
+		f1 = str(time.time())
+		runner(['touch', str(SUBVOLUME/f1)])
+		if runner(['cp', '--reflink', SUBVOLUME/f1, parent], die_on_error=False) != -1:
+			snapshot_parent_dir = parent
+		else:
+			_prerr(f'cp --reflink failed, this means that {parent} is not the same filesystem, going to make snapshot inside {SUBVOLUME} instead of {parent}')
+			snapshot_parent_dir = SUBVOLUME
 
 		return Res(str(Path(str(snapshot_parent_dir) + '/.bfg_snapshots/' + Path(SUBVOLUME).parts[-1] + '_bfg_snapshots').absolute()))
 
