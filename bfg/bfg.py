@@ -127,21 +127,32 @@ class Bfg:
 		SUBVOLUME = Path(SUBVOLUME)
 		parent = SUBVOLUME.parent
 
+		_prerr(f'calculate_default_snapshot_parent_dir for {SUBVOLUME=}')
+
 		# is parent the same filesystem as SUBVOLUME? if not, then SUBVOLUME is the top level subvolume, and we need to make the snapshot inside it, rather than outside.
+
 
 		if machine == 'local':
 			runner = s._local_cmd
 		else:
 			runner = s._remote_cmd
-		runner(['mkdir', '-p', str(SUBVOLUME)])
-		# hope to come up with a unique file names:
-		f1 = str(time.time())
-		runner(['touch', str(SUBVOLUME/f1)])
-		if runner(['cp', '--reflink', SUBVOLUME/f1, parent], die_on_error=False) != -1:
+
+		if runner(['test', '-e', str(SUBVOLUME)], die_on_error=False) == -1:
+			# we assume that if the target filesystem is mounted. This implies that if we're transferring the root subvol, the directory exists. This is the only case where the snapshot parent dir will be inside the subvol, rather than outside. Therefore, if the destination does not exist (as a directory or subvolume), it is safe to assume that it is not the root subvolume. 
 			snapshot_parent_dir = parent
 		else:
-			_prerr(f'cp --reflink failed, this means that {parent} is not the same filesystem, going to make snapshot inside {SUBVOLUME} instead of {parent}')
-			snapshot_parent_dir = SUBVOLUME
+
+			runner(['mkdir', '-p', str(SUBVOLUME)])
+			
+			# hope to come up with a unique file names:
+			f1 = str(time.time())
+			runner(['touch', str(SUBVOLUME/f1)])
+	
+			if runner(['cp', '--reflink', SUBVOLUME/f1, parent], die_on_error=False) != -1:
+				snapshot_parent_dir = parent
+			else:
+				_prerr(f'cp --reflink failed, this means that {parent} is not the same filesystem, going to make snapshot inside {SUBVOLUME} instead of {parent}')
+				snapshot_parent_dir = SUBVOLUME
 
 		return Res(str(Path(str(snapshot_parent_dir) + '/.bfg_snapshots/' + Path(SUBVOLUME).parts[-1] + '_bfg_snapshots').absolute()))
 
@@ -284,10 +295,11 @@ class Bfg:
 
 	def stash_remote(s, SUBVOLUME):
 		"""snapshot and delete your SUBVOLUME"""
-		if s._remote_cmd(['ls', SUBVOLUME], die_on_error=False) == -1:
+		if s._remote_cmd(['test', '-e', SUBVOLUME], die_on_error=False) == -1:
 			_prerr(f'nothing to stash {s._remote_str}, {SUBVOLUME} doesn\'t exist.')
 			return None
 		else:
+			_prerr(f'gonna stash {s._remote_str}, {SUBVOLUME}.')
 			snapshot = s._remote_make_ro_snapshot(SUBVOLUME, s.calculate_default_snapshot_path('remote', Path(SUBVOLUME), 'stash_before_remote_checkout').val)
 
 			cmd = f'btrfs subvolume delete {SUBVOLUME}'
