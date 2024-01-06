@@ -46,13 +46,13 @@ class VolWalker:
 
 		if my_uuid not in s.by_uuid:
 			# the show almost stops here, but only almost. We could still look up all subvols that have this uuid as a parent/received uuid, and pursue those. It wouldn't be known if the missing subvol was ro or rw, so, these could be presented as only the last case options to try.
-		    logging.debug('my_uuid not in s.by_uuid')
+			logging.debug('my_uuid not in s.by_uuid')
 			return
 
 		for i in s.ro_chain(my_uuid):
 			# ^ grab my_uuid if it's ro, otherwise grab it's ro children, and then their children recursively. What this accomplishes is that we'll be looking at a direct ro snapshot (or at the ro subvol itself), so that we can now check if it made it to the other side:
 
-            logging.debug(f'i: {i}.')
+			logging.debug(f'i: {i}.')
 
 			for remote_snapshot in s.ro_descendants_chain(i, s.target):
 				remote_snapshot_local_uuid = remote_snapshot['local_uuid']
