@@ -184,8 +184,8 @@ class Bfg:
 	def get_subvol_uuid_by_path(s, runner, path):
 		out = runner(f'btrfs sub show {path}')
 		r = Res(out.splitlines()[2].split()[1])
-		logging.debug('get_subvol_uuid_by_path', r)
-
+		logging.debug('get_subvol_uuid_by_path: ', str(r))
+		return r
 
 
 
