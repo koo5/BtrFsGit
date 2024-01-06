@@ -22,7 +22,7 @@ from .utils import *
 
 
 
-#logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.DEBUG)
 
 
 
@@ -95,7 +95,7 @@ class Bfg:
 		if not isinstance(c, list):
 			c = shlex.split(c)
 		c = s._sudo + [str(x) for x in c]
-		_prerr(shlex.join(c) + ' ...')
+		_prerr(shlex.join(c))
 		return s._cmd(c, die_on_error)
 
 
@@ -138,16 +138,16 @@ class Bfg:
 			runner = s._remote_cmd
 
 		if runner(['test', '-e', str(SUBVOLUME)], die_on_error=False) == -1:
-			# we assume that if the target filesystem is mounted. This implies that if we're transferring the root subvol, the directory exists. This is the only case where the snapshot parent dir will be inside the subvol, rather than outside. Therefore, if the destination does not exist (as a directory or subvolume), it is safe to assume that it is not the root subvolume. 
+			# we assume that if the target filesystem is mounted. This implies that if we're transferring the root subvol, the directory exists. This is the only case where the snapshot parent dir will be inside the subvol, rather than outside. Therefore, if the destination does not exist (as a directory or subvolume), it is safe to assume that it is not the root subvolume.
 			snapshot_parent_dir = parent
 		else:
 
 			runner(['mkdir', '-p', str(SUBVOLUME)])
-			
+
 			# hope to come up with a unique file names:
 			f1 = str(time.time())
 			runner(['touch', str(SUBVOLUME/f1)])
-	
+
 			if runner(['cp', '--reflink', SUBVOLUME/f1, parent], die_on_error=False) != -1:
 				snapshot_parent_dir = parent
 			else:
@@ -183,7 +183,8 @@ class Bfg:
 
 	def get_subvol_uuid_by_path(s, runner, path):
 		out = runner(f'btrfs sub show {path}')
-		return Res(out.splitlines()[2].split()[1])
+		r = Res(out.splitlines()[2].split()[1])
+        logging.debug('get_subvol_uuid_by_path', r)
 
 
 
@@ -533,6 +534,8 @@ class Bfg:
 				raise 'wut'
 			all_subvols2[i['local_uuid']] = i
 
+        logging.debug('all_subvols2:')
+        logging.debug(json.dumps(all_subvols2, indent=2))
 
 		yield from VolWalker(all_subvols2, direction).walk(my_uuid)
 
@@ -567,7 +570,7 @@ def _get_subvolumes(command_runner, subvolume):
 
 
 def _make_snapshot_struct_from_sub_list_output_line(line):
-	#logging.debug(line)
+	logging.debug(line)
 	items = line.split()
 	subvol_id = items[0]
 	parent_uuid = items[3]
