@@ -184,7 +184,7 @@ class Bfg:
 	def get_subvol_uuid_by_path(s, runner, path):
 		out = runner(f'btrfs sub show {path}')
 		r = Res(out.splitlines()[2].split()[1])
-        logging.debug('get_subvol_uuid_by_path', r)
+		logging.debug('get_subvol_uuid_by_path', r)
 
 
 
@@ -534,8 +534,8 @@ class Bfg:
 				raise 'wut'
 			all_subvols2[i['local_uuid']] = i
 
-        logging.debug('all_subvols2:')
-        logging.debug(json.dumps(all_subvols2, indent=2))
+		logging.debug('all_subvols2:')
+		logging.debug(json.dumps(all_subvols2, indent=2))
 
 		yield from VolWalker(all_subvols2, direction).walk(my_uuid)
 
