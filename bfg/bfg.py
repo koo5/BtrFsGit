@@ -588,6 +588,7 @@ def _make_snapshot_struct_from_sub_list_output_line(line):
 	snapshot['parent_uuid'] = parent_uuid
 	snapshot['local_uuid'] = local_uuid
 	snapshot['subvol_id'] = int(subvol_id)
+	logging.debug(snapshot)
 
 	return snapshot
 
