@@ -516,6 +516,7 @@ class Bfg:
 		remote_subvols = _get_subvolumes(s._remote_cmd, remote_subvolume)
 		local_subvols = _get_subvolumes(s._local_cmd, subvolume)
 		other_subvols = load_subvol_dumps()
+		subvol_itself = ...()
 
 		all_subvols = []
 		for machine,lst in {
