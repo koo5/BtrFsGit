@@ -181,10 +181,20 @@ class Bfg:
 
 
 
-	def get_subvol_uuid_by_path(s, runner, path):
+	def get_subvol(s, runner, path):
 		out = runner(f'btrfs sub show {path}')
-		r = Res(out.splitlines()[2].split()[1])
-		logging.debug('get_subvol_uuid_by_path: %s', str(r))
+		lines = out.splitlines()
+
+		sv = {}
+		sv['received_uuid'] = dash_is_none(lines[4].split()[2])
+		sv['parent_uuid'] = dash_is_none(lines[3].split()[2])
+		sv['local_uuid'] = lines[2].split()[1]
+		sv['subvol_id'] = int(lines[6].split()[2])
+		sv['ro'] = lines[11].split()[1] == 'readonly'
+		logging.debug(sv)
+
+		r = Res(sv)
+		logging.debug('get_subvol: %s', str(r))
 		return r
 
 
@@ -369,7 +379,7 @@ class Bfg:
 		s._remote_cmd(['mkdir', '-p', str(snapshot_parent)])
 
 		if PARENT is None:
-			my_uuid = s.get_subvol_uuid_by_path(s._local_cmd, SUBVOLUME).val
+			my_uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
 			PARENT = s.find_common_parent(SUBVOLUME, str(snapshot_parent), my_uuid, ('local','remote')).val
 			if PARENT is not None:
 				PARENT = PARENT['abspath']
@@ -384,7 +394,7 @@ class Bfg:
 		s._local_cmd(['mkdir', '-p', str(local_snapshot_parent_dir)])
 
 		if PARENT is None:
-			my_uuid = s.get_subvol_uuid_by_path(s._remote_cmd, REMOTE_SNAPSHOT).val
+			my_uuid = s.get_subvol(s._remote_cmd, REMOTE_SNAPSHOT).val['local_uuid']
 			PARENT = s.find_common_parent(local_snapshot_parent_dir, REMOTE_SNAPSHOT, my_uuid, ('remote', 'local')).val
 			if PARENT is not None:
 				PARENT = PARENT['abspath']
@@ -516,14 +526,15 @@ class Bfg:
 		remote_subvols = _get_subvolumes(s._remote_cmd, remote_subvolume)
 		local_subvols = _get_subvolumes(s._local_cmd, subvolume)
 		other_subvols = load_subvol_dumps()
-		subvol_itself = ...()
+		
 
 		all_subvols = []
-		for machine,lst in {
-			'remote':remote_subvols,
-			'local':local_subvols,
-			'other':other_subvols
-		}.items():
+		for machine,lst in [
+			('remote',remote_subvols),
+			('local',local_subvols),
+			('other',other_subvols),
+			('local',[s.get_subvol(s._local_cmd, subvolume).val])
+		]:
 			for v in lst:
 				v['machine'] = machine
 				all_subvols.append(v)
@@ -564,7 +575,7 @@ def _get_subvolumes(command_runner, subvolume):
 		ro = i['local_uuid'] in ro_subvols
 		i['ro'] = ro
 		#_prerr(str(i))
-
+	
 	subvols.sort(key = lambda sv: -sv['subvol_id'])
 	return subvols
 
@@ -574,17 +585,11 @@ def _make_snapshot_struct_from_sub_list_output_line(line):
 	logging.debug(line)
 	items = line.split()
 	subvol_id = items[0]
-	parent_uuid = items[3]
-	received_uuid = items[4]
+	parent_uuid = dash_is_none(items[3])
+	received_uuid = dash_is_none(items[4])
 	local_uuid = items[5]
 
 	snapshot = {}
-
-	if received_uuid == '-':
-		received_uuid = None
-	if parent_uuid == '-':
-		parent_uuid = None
-
 	snapshot['received_uuid'] = received_uuid
 	snapshot['parent_uuid'] = parent_uuid
 	snapshot['local_uuid'] = local_uuid
@@ -593,6 +598,11 @@ def _make_snapshot_struct_from_sub_list_output_line(line):
 
 	return snapshot
 
+def dash_is_none(string):
+	if string == '-':
+		return None
+	else:
+		return string
 
 def try_unlink(f):
 	try:

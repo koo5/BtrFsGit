@@ -142,9 +142,3 @@ def load_subvol_dumps():
 	"""
 	return []
 
-
-def root_subvol_struct():
-	"""
-	:return: structure of the root subvol
-	"""
-	snapshot = {}
