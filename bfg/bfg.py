@@ -191,10 +191,9 @@ class Bfg:
 		sv['local_uuid'] = lines[2].split()[1]
 		sv['subvol_id'] = int(lines[6].split()[2])
 		sv['ro'] = lines[11].split()[1] == 'readonly'
-		logging.debug(sv)
 
 		r = Res(sv)
-		logging.debug('get_subvol: %s', str(r))
+		logging.debug('get_subvol: %s', str(sv))
 		return r
 
 
@@ -526,6 +525,8 @@ class Bfg:
 		remote_subvols = _get_subvolumes(s._remote_cmd, remote_subvolume)
 		local_subvols = _get_subvolumes(s._local_cmd, subvolume)
 		other_subvols = load_subvol_dumps()
+		toplevel_subvol = s.get_subvol(s._local_cmd, subvolume).val
+		toplevel_subvols = [toplevel_subvol]
 		
 
 		all_subvols = []
@@ -533,7 +534,7 @@ class Bfg:
 			('remote',remote_subvols),
 			('local',local_subvols),
 			('other',other_subvols),
-			('local',[s.get_subvol(s._local_cmd, subvolume).val])
+			('local',toplevel_subvols)
 		]:
 			for v in lst:
 				v['machine'] = machine
@@ -543,7 +544,8 @@ class Bfg:
 		all_subvols2 = {}
 		for i in all_subvols:
 			if i['local_uuid'] in all_subvols2:
-				raise 'wut'
+				if i != all_subvols2[i['local_uuid']]:
+					raise 'wut'
 			all_subvols2[i['local_uuid']] = i
 
 		logging.debug('all_subvols2:')
