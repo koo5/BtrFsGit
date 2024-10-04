@@ -176,7 +176,7 @@ class Bfg:
 				TAG = 'from_' + subprocess.check_output(['hostname'], text=True).strip()
 			name = ts + '_' + TAG
 
-		return Res(str(Path(parent) / str(parent) + '_' + name))
+		return Res(str(Path(parent) / (str(parent) + '_' + name)))
 
 
 
