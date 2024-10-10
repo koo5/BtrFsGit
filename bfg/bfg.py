@@ -546,9 +546,9 @@ class Bfg:
 		for i in all_subvols:
 			if i['local_uuid'] in all_subvols2:
 				if i != all_subvols2[i['local_uuid']]:
-                    logging.warning('duplicate subvols:')
-                    logging.warning(i)
-                    logging.warning(all_subvols2[i['local_uuid']])
+					logging.warning('duplicate subvols:')
+					logging.warning(i)
+					logging.warning(all_subvols2[i['local_uuid']])
 					raise 'wut'
 			all_subvols2[i['local_uuid']] = i
 
