@@ -146,9 +146,10 @@ class Bfg:
 
 			# hope to come up with a unique file names:
 			f1 = str(time.time())
+            f2 = f1 + "_dest"
 			runner(['touch', str(SUBVOLUME/f1)])
 
-			if runner(['cp', '--reflink', SUBVOLUME/f1, parent], die_on_error=False) != -1:
+			if runner(['cp', '--reflink', SUBVOLUME/f1, parent/f2], die_on_error=False) != -1:
 				snapshot_parent_dir = parent
 			else:
 				_prerr(f'cp --reflink failed, this means that {parent} is not the same filesystem, going to make snapshot inside {SUBVOLUME} instead of {parent}')
@@ -527,7 +528,7 @@ class Bfg:
 		other_subvols = load_subvol_dumps()
 		toplevel_subvol = s.get_subvol(s._local_cmd, subvolume).val
 		toplevel_subvols = [toplevel_subvol]
-		
+
 
 		all_subvols = []
 		for machine,lst in [
@@ -577,7 +578,7 @@ def _get_subvolumes(command_runner, subvolume):
 		ro = i['local_uuid'] in ro_subvols
 		i['ro'] = ro
 		#_prerr(str(i))
-	
+
 	subvols.sort(key = lambda sv: -sv['subvol_id'])
 	return subvols
 
