@@ -146,7 +146,7 @@ class Bfg:
 
 			# hope to come up with a unique file names:
 			f1 = str(time.time())
-            f2 = f1 + "_dest"
+			f2 = f1 + "_dest"
 			runner(['touch', str(SUBVOLUME/f1)])
 
 			if runner(['cp', '--reflink', SUBVOLUME/f1, parent/f2], die_on_error=False) != -1:
