@@ -2,6 +2,9 @@ import logging
 import json
 
 
+from bfg.bfg_logging import configure_logging_from_env
+configure_logging_from_env()
+
 
 class Res:
 	"""helper class for passing results of Fire-invoked functions around and make sure they're printed understandably and machine-readably"""

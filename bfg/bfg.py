@@ -1,43 +1,38 @@
 #!/usr/bin/env python3
 
-
 """
 The Big Friendly F.....g Gun!
 """
 
-
-
-import logging
+from bfg.bfg_logging import configure_logging_from_env
 from pathlib import Path
 from pathvalidate import sanitize_filename
-import sys,os
+import sys, os
 import time
 import subprocess
 import fire
-import shlex # python 3.8 required (at least for shlex.join)
+import shlex  # python 3.8 required (at least for shlex.join)
 from typing import List
 import json
 from .utils import *
 
-
-
-
 logging.basicConfig(level=logging.INFO)
-
 
 
 def prompt(*args, **kwargs):
 	try:
 		import PyInquirer
 	except:
-		print('`import PyInquirer` failed. PyInquirer is needed for interactive prompts:' + str(args) + ' ' + str(kwargs))
+		print(
+			'`import PyInquirer` failed. PyInquirer is needed for interactive prompts:' + str(args) + ' ' + str(kwargs))
 		sys.exit(1)
 	return PyInquirer.prompt(*args, **kwargs)
 
+
 class Bfg:
 
-
-	def __init__(s, LOCAL_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=None, REMOTE_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=None, sshstr='', YES=False):
+	def __init__(s, LOCAL_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=None, REMOTE_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=None, sshstr='',
+				 YES=False):
 
 		s._local_fs_id5_mount_point = LOCAL_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT
 		s._remote_fs_id5_mount_point = REMOTE_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT
@@ -51,7 +46,6 @@ class Bfg:
 		s._local_str = '(here)'
 		s._sudo = ['sudo']
 
-
 	def _yes(s, msg):
 		"""
 		interactive confirmation prompt for dangerous operations
@@ -60,21 +54,18 @@ class Bfg:
 			return True
 		return prompt(
 			{
-			'type': 'confirm',
-			'name': 'ok',
-			'message': msg + ' ( --YES=True )',
-			'default': False
+				'type': 'confirm',
+				'name': 'ok',
+				'message': msg + ' ( --YES=True )',
+				'default': False
 			}
 		)['ok']
-
-
 
 	"""
 
 	helper functions for running subprocessess locally and over ssh
 
 	"""
-
 
 	def _remote_cmd(s, cmd, die_on_error=True):
 		"""potentially remote command"""
@@ -90,14 +81,12 @@ class Bfg:
 		else:
 			return s._local_cmd(cmd, die_on_error)
 
-
 	def _local_cmd(s, c, die_on_error=True):
 		if not isinstance(c, list):
 			c = shlex.split(c)
 		c = s._sudo + [str(x) for x in c]
 		_prerr(shlex.join(c))
 		return s._cmd(c, die_on_error)
-
 
 	def _cmd(s, c, die_on_error):
 		try:
@@ -109,15 +98,11 @@ class Bfg:
 			else:
 				return -1
 
-
-
-
 	"""
 
 
 	helper stuff
 	"""
-
 
 	def calculate_default_snapshot_parent_dir(s, machine: str, SUBVOLUME):
 		"""
@@ -130,7 +115,6 @@ class Bfg:
 		_prerr(f'calculate_default_snapshot_parent_dir for {SUBVOLUME=}')
 
 		# is parent the same filesystem as SUBVOLUME? if not, then SUBVOLUME is the top level subvolume, and we need to make the snapshot inside it, rather than outside.
-
 
 		if machine == 'local':
 			runner = s._local_cmd
@@ -147,19 +131,19 @@ class Bfg:
 			# hope to come up with a unique file names:
 			f1 = str(time.time())
 			f2 = f1 + "_dest"
-			runner(['touch', str(SUBVOLUME/f1)])
+			runner(['touch', str(SUBVOLUME / f1)])
 
-			if runner(['cp', '--reflink', SUBVOLUME/f1, parent/f2], die_on_error=False) != -1:
+			if runner(['cp', '--reflink', SUBVOLUME / f1, parent / f2], die_on_error=False) != -1:
 				snapshot_parent_dir = parent
 			else:
-				_prerr(f'cp --reflink failed, this means that {parent} is not the same filesystem, going to make snapshot inside {SUBVOLUME} instead of {parent}')
+				_prerr(
+					f'cp --reflink failed, this means that {parent} is not the same filesystem, going to make snapshot inside {SUBVOLUME} instead of {parent}')
 				snapshot_parent_dir = SUBVOLUME
 
-		return Res(str(Path(str(snapshot_parent_dir) + '/.bfg_snapshots/' + Path(SUBVOLUME).parts[-1] + '_bfg_snapshots').absolute()))
+		return Res(str(Path(
+			str(snapshot_parent_dir) + '/.bfg_snapshots/' + Path(SUBVOLUME).parts[-1] + '_bfg_snapshots').absolute()))
 
-
-
-	def calculate_default_snapshot_path(s, machine, SUBVOLUME, TAG, NAME_OVERRIDE=None): #, TAG2):
+	def calculate_default_snapshot_path(s, machine, SUBVOLUME, TAG, NAME_OVERRIDE=None):  # , TAG2):
 		"""
 		calculate the filesystem path where a snapshot should go, given a subvolume and a tag
 		"""
@@ -170,7 +154,7 @@ class Bfg:
 		else:
 
 			tss = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
-			#tss = subprocess.check_output(['date', '-u', "+%Y-%m-%d_%H-%M-%S"], text=True).strip()
+			# tss = subprocess.check_output(['date', '-u', "+%Y-%m-%d_%H-%M-%S"], text=True).strip()
 			ts = sanitize_filename(tss.replace(' ', '_'))
 
 			if TAG is None:
@@ -178,9 +162,6 @@ class Bfg:
 			name = ts + '_' + TAG
 
 		return Res(str(Path(parent) / (str(parent) + '_' + name)))
-
-
-
 
 	def get_subvol(s, runner, path):
 		out = runner(f'btrfs sub show {path}')
@@ -197,15 +178,13 @@ class Bfg:
 		logging.debug('get_subvol: %s', str(sv))
 		return r
 
-
-
 	"""
 
 	high-level, compound commands
 
 	"""
 
-	def commit_and_push_and_checkout(s, SUBVOLUME, REMOTE_SUBVOLUME, PARENT:str=None):
+	def commit_and_push_and_checkout(s, SUBVOLUME, REMOTE_SUBVOLUME, PARENT: str = None):
 		"""
 		Snapshot your data, "btrfs send"/"btrfs receive" the snapshot to the other machine, and checkout it there
 
@@ -217,7 +196,6 @@ class Bfg:
 		remote_snapshot_path = s.commit_and_push(SUBVOLUME, REMOTE_SUBVOLUME, PARENT=PARENT).val
 		s.checkout_remote(remote_snapshot_path, REMOTE_SUBVOLUME)
 		return Res(REMOTE_SUBVOLUME)
-
 
 	def remote_commit_and_pull(s, REMOTE_SUBVOLUME, SUBVOLUME):
 		"""
@@ -234,8 +212,7 @@ class Bfg:
 		_prerr(f'DONE, \n\tpulled {remote_snapshot_path} \n\tinto {SUBVOLUME}\n.')
 		return Res(SUBVOLUME)
 
-
-	def commit_and_generate_patch(s, SUBVOLUME='/', PATCH_FILE_DIR='/', PARENTS:List[str]=None):
+	def commit_and_generate_patch(s, SUBVOLUME='/', PATCH_FILE_DIR='/', PARENTS: List[str] = None):
 		"""
 		store a `btrfs send` stream locally
 
@@ -245,22 +222,18 @@ class Bfg:
 		:return:
 		"""
 		snapshot = s.local_commit(SUBVOLUME).val
-		#print(Path(snapshot).parts[-2:])
+		# print(Path(snapshot).parts[-2:])
 		fn = PATCH_FILE_DIR + '/' + '__'.join(Path(snapshot).parts[-2:])
-		#print(fn)
+		# print(fn)
 		s.local_send(snapshot, ' > ' + fn, PARENTS)
 		_prerr(f'DONE, generated patch \n\tfrom {snapshot} \n\tinto {fn}\n.')
 		return Res(fn)
 
-
-
-	def commit_and_push(s, SUBVOLUME, REMOTE_SUBVOLUME, SNAPSHOT_TAG=None, SNAPSHOT_PATH=None, SNAPSHOT_NAME=None, PARENT=None, CLONESRCS:List[str]=[]):
+	def commit_and_push(s, SUBVOLUME, REMOTE_SUBVOLUME, SNAPSHOT_TAG=None, SNAPSHOT_PATH=None, SNAPSHOT_NAME=None,
+						PARENT=None, CLONESRCS: List[str] = []):
 		"""commit, and transfer the snapshot into .bfg_snapshots on the other machine"""
 		snapshot = s.local_commit(SUBVOLUME, SNAPSHOT_TAG, SNAPSHOT_PATH, SNAPSHOT_NAME).val
 		return Res(s.push(SUBVOLUME, snapshot, REMOTE_SUBVOLUME, PARENT, CLONESRCS).val)
-
-
-
 
 	"""
 
@@ -275,7 +248,6 @@ class Bfg:
 		_prerr(f'DONE {s._local_str}, \n\tchecked out {SNAPSHOT} \n\tinto {SUBVOLUME}\n.')
 		return Res(SUBVOLUME)
 
-
 	def checkout_remote(s, SNAPSHOT, SUBVOLUME):
 		"""ssh into the other machine,
 		stash your SUBVOLUME, and replace it with SNAPSHOT"""
@@ -284,8 +256,7 @@ class Bfg:
 		_prerr(f'DONE {s._remote_str}, \n\tchecked out {SNAPSHOT} \n\tinto {SUBVOLUME}\n.')
 		return Res(SUBVOLUME)
 
-
-	def stash_local(s, SUBVOLUME, SNAPSHOT_TAG = 'stash', SNAPSHOT_NAME=None):
+	def stash_local(s, SUBVOLUME, SNAPSHOT_TAG='stash', SNAPSHOT_NAME=None):
 		"""
 		snapshot and delete your SUBVOLUME
 
@@ -295,7 +266,9 @@ class Bfg:
 			_prerr(f'nothing to stash {s._local_str}, {SUBVOLUME} doesn\'t exist.')
 			return None
 		else:
-			snapshot = s._local_make_ro_snapshot(SUBVOLUME, s.calculate_default_snapshot_path('local', SUBVOLUME, SNAPSHOT_TAG, SNAPSHOT_NAME).val)
+			snapshot = s._local_make_ro_snapshot(SUBVOLUME,
+												 s.calculate_default_snapshot_path('local', SUBVOLUME, SNAPSHOT_TAG,
+																				   SNAPSHOT_NAME).val)
 
 			cmd = f'btrfs subvolume delete {SUBVOLUME}'
 			if not s._yes(cmd):
@@ -311,7 +284,9 @@ class Bfg:
 			return None
 		else:
 			_prerr(f'gonna stash {s._remote_str}, {SUBVOLUME}.')
-			snapshot = s._remote_make_ro_snapshot(SUBVOLUME, s.calculate_default_snapshot_path('remote', Path(SUBVOLUME), 'stash_before_remote_checkout').val)
+			snapshot = s._remote_make_ro_snapshot(SUBVOLUME,
+												  s.calculate_default_snapshot_path('remote', Path(SUBVOLUME),
+																					'stash_before_remote_checkout').val)
 
 			cmd = f'btrfs subvolume delete {SUBVOLUME}'
 			if not s._yes(cmd):
@@ -320,8 +295,6 @@ class Bfg:
 
 			_prerr(f'DONE {s._remote_str}, \n\tsnapshotted {SUBVOLUME} \n\tinto {snapshot}\n, and deleted it.')
 			return Res(snapshot)
-
-
 
 	def local_commit(s, SUBVOLUME='/', TAG=None, SNAPSHOT=None, SNAPSHOT_NAME=None):
 		"""
@@ -346,8 +319,6 @@ class Bfg:
 		s._local_make_ro_snapshot(SUBVOLUME, SNAPSHOT)
 		return Res(SNAPSHOT)
 
-
-
 	def remote_commit(s, REMOTE_SUBVOLUME, TAG=None, SNAPSHOT=None, SNAPSHOT_NAME=None):
 		if TAG and SNAPSHOT:
 			_prerr(f'please specify SNAPSHOT or TAG, not both')
@@ -361,12 +332,11 @@ class Bfg:
 		if SNAPSHOT is not None:
 			SNAPSHOT = Path(SNAPSHOT).absolute()
 		else:
-			SNAPSHOT = s.calculate_default_snapshot_path('remote', Path(REMOTE_SUBVOLUME), 'remote_commit', SNAPSHOT_NAME).val
+			SNAPSHOT = s.calculate_default_snapshot_path('remote', Path(REMOTE_SUBVOLUME), 'remote_commit',
+														 SNAPSHOT_NAME).val
 		s._remote_make_ro_snapshot(REMOTE_SUBVOLUME, SNAPSHOT)
 		_prerr(f'DONE {s._remote_str},\n\tsnapshotted {REMOTE_SUBVOLUME} \n\tinto {SNAPSHOT}\n.')
 		return Res(SNAPSHOT)
-
-
 
 	def push(s, SUBVOLUME, SNAPSHOT, REMOTE_SUBVOLUME, PARENT=None, CLONESRCS=[]):
 		"""
@@ -380,14 +350,14 @@ class Bfg:
 
 		if PARENT is None:
 			my_uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
-			PARENT = s.find_common_parent(SUBVOLUME, str(snapshot_parent), my_uuid, ('local','remote')).val
+			PARENT = s.find_common_parent(SUBVOLUME, str(snapshot_parent), my_uuid, ('local', 'remote')).val
 			if PARENT is not None:
 				PARENT = PARENT['abspath']
 
-		s.local_send(SNAPSHOT, ' | ' + s._sshstr + ' ' + s._sudo[0] + " btrfs receive " + str(snapshot_parent), PARENT, CLONESRCS)
+		s.local_send(SNAPSHOT, ' | ' + s._sshstr + ' ' + s._sudo[0] + " btrfs receive " + str(snapshot_parent), PARENT,
+					 CLONESRCS)
 		_prerr(f'DONE, \n\tpushed {SNAPSHOT} \n\tinto {snapshot_parent}\n.')
 		return Res(str(snapshot_parent) + '/' + Path(SNAPSHOT).parts[-1])
-
 
 	def pull(s, REMOTE_SNAPSHOT, LOCAL_SUBVOLUME, PARENT=None, CLONESRCS=[]):
 		local_snapshot_parent_dir = s.calculate_default_snapshot_parent_dir('local', Path(LOCAL_SUBVOLUME)).val
@@ -406,8 +376,6 @@ class Bfg:
 		_prerr(f'DONE, \n\tpulled {REMOTE_SNAPSHOT} \n\tinto {local_snapshot}\n.')
 		return Res(local_snapshot)
 
-
-
 	"""
 
 	low-level operations
@@ -421,14 +389,12 @@ class Bfg:
 		_prerr(f'DONE {s._local_str}, \n\tsnapshotted {SUBVOLUME} \n\tinto {SNAPSHOT}\n.')
 		return SNAPSHOT
 
-
 	def _remote_make_ro_snapshot(s, SUBVOLUME, SNAPSHOT):
 		"""make a read-only snapshot of SUBVOLUME into SNAPSHOT, remotely"""
 		SNAPSHOT_PARENT = os.path.split((SNAPSHOT))[0]
 		s._remote_cmd(f'mkdir -p {SNAPSHOT_PARENT}')
 		s._remote_cmd(f'btrfs subvolume snapshot -r {SUBVOLUME} {SNAPSHOT}')
 		return SNAPSHOT
-
 
 	def _parent_args(s, PARENT, CLONESRCS):
 		parents_args = []
@@ -443,15 +409,13 @@ class Bfg:
 
 		return parents_args
 
-
 	def local_send(s, SNAPSHOT, target, PARENT, CLONESRCS):
 		parents_args = s._parent_args(PARENT, CLONESRCS)
 
-		#_prerr((str(parents_args)) + ' #...')
+		# _prerr((str(parents_args)) + ' #...')
 		cmd = shlex.join(s._sudo + ['btrfs', 'send'] + parents_args + [SNAPSHOT]) + target
 		_prerr((cmd) + ' #...')
 		subprocess.check_call(cmd, shell=True)
-
 
 	def remote_send(s, REMOTE_SNAPSHOT, LOCAL_DIR, PARENT, CLONESRCS):
 		parents_args = s._parent_args(PARENT, CLONESRCS)
@@ -465,17 +429,15 @@ class Bfg:
 		p2 = subprocess.Popen(
 			cmd2,
 			stdin=p1.stdout)
-		p1.stdout.close()  #  https://www.titanwolf.org/Network/q/91c3c5dd-aa49-4bf4-911d-1bfe5ac304da/y
+		p1.stdout.close()  # https://www.titanwolf.org/Network/q/91c3c5dd-aa49-4bf4-911d-1bfe5ac304da/y
 		p2.communicate()
 		if p2.returncode != 0:
 			_prerr('exit code ' + str(p2.returncode))
 			exit(1)
 
-
-
 	def find_common_parent(s, subvolume, remote_subvolume, my_uuid, direction):
 		candidates = s.parent_candidates(subvolume, remote_subvolume, my_uuid, direction).val
-		#candidates.sort(key = lambda sv: sv['subvol_id']) # nope, subvol id is a crude approximation. What happens when you snapshot and old ro snapshot? It gets the highest id.
+		# candidates.sort(key = lambda sv: sv['subvol_id']) # nope, subvol id is a crude approximation. What happens when you snapshot and old ro snapshot? It gets the highest id.
 		if len(candidates) != 0:
 			winner = candidates[0]
 			s._add_abspath(winner)
@@ -493,25 +455,26 @@ class Bfg:
 	def _local_add_abspath(s, subvol_record):
 		if s._local_fs_id5_mount_point is None:
 			s._local_fs_id5_mount_point = prompt(
-			{
-			'type': 'input',
-			'name': 'path',
-			'message': "where did you mount the top level subvolume (ID 5, not your /@ root)? Yes this is silly but i really need to know."
-			}
-		)['path']
-		subvol_record['abspath'] = s._local_fs_id5_mount_point + '/' + s._local_cmd(['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), s._local_fs_id5_mount_point]).strip()
+				{
+					'type': 'input',
+					'name': 'path',
+					'message': "where did you mount the top level subvolume (ID 5, not your /@ root)? Yes this is silly but i really need to know."
+				}
+			)['path']
+		subvol_record['abspath'] = s._local_fs_id5_mount_point + '/' + s._local_cmd(
+			['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), s._local_fs_id5_mount_point]).strip()
 
 	def _remote_add_abspath(s, subvol_record):
 		if s._remote_fs_id5_mount_point is None:
 			s._remote_fs_id5_mount_point = prompt(
-			{
-			'type': 'input',
-			'name': 'path',
-			'message': "where did you mount the top level subvolume (ID 5, not your /@ root) on the remote machine? Yes this is silly but i really need to know."
-			}
-		)['path']
-		subvol_record['abspath'] = s._remote_fs_id5_mount_point + '/' + s._remote_cmd(['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), s._remote_fs_id5_mount_point]).strip()
-
+				{
+					'type': 'input',
+					'name': 'path',
+					'message': "where did you mount the top level subvolume (ID 5, not your /@ root) on the remote machine? Yes this is silly but i really need to know."
+				}
+			)['path']
+		subvol_record['abspath'] = s._remote_fs_id5_mount_point + '/' + s._remote_cmd(
+			['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), s._remote_fs_id5_mount_point]).strip()
 
 	def parent_candidates(s, subvolume, remote_subvolume, my_uuid, direction):
 		candidates = []
@@ -519,7 +482,6 @@ class Bfg:
 			candidates.append(c)
 			_prerr('shared parent: ' + c['local_uuid'])
 		return Res(candidates)
-
 
 	def _parent_candidates(s, subvolume, remote_subvolume, my_uuid, direction):
 
@@ -529,18 +491,16 @@ class Bfg:
 		toplevel_subvol = s.get_subvol(s._local_cmd, subvolume).val
 		toplevel_subvols = [toplevel_subvol]
 
-
 		all_subvols = []
-		for machine,lst in [
-			('remote',remote_subvols),
-			('local',local_subvols),
-			('other',other_subvols),
-			('local',toplevel_subvols)
+		for machine, lst in [
+			('remote', remote_subvols),
+			('local', local_subvols),
+			('other', other_subvols),
+			('local', toplevel_subvols)
 		]:
 			for v in lst:
 				v['machine'] = machine
 				all_subvols.append(v)
-
 
 		all_subvols2 = {}
 		for i in all_subvols:
@@ -558,8 +518,6 @@ class Bfg:
 		yield from VolWalker(all_subvols2, direction).walk(my_uuid)
 
 
-
-
 def _get_subvolumes(command_runner, subvolume):
 	"""
 	:param subvolume: filesystem path to a subvolume on the filesystem that we want to get a list of subvolumes of
@@ -575,16 +533,15 @@ def _get_subvolumes(command_runner, subvolume):
 	for line in command_runner(cmd + ['-r', subvolume]).splitlines()[2:]:
 		subvol = _make_snapshot_struct_from_sub_list_output_line(line)
 		ro_subvols.add(subvol['local_uuid'])
-	#_prerr(str(ro_subvols))
+	# _prerr(str(ro_subvols))
 
 	for i in subvols:
 		ro = i['local_uuid'] in ro_subvols
 		i['ro'] = ro
-		#_prerr(str(i))
+	# _prerr(str(i))
 
-	subvols.sort(key = lambda sv: -sv['subvol_id'])
+	subvols.sort(key=lambda sv: -sv['subvol_id'])
 	return subvols
-
 
 
 def _make_snapshot_struct_from_sub_list_output_line(line):
@@ -604,11 +561,13 @@ def _make_snapshot_struct_from_sub_list_output_line(line):
 
 	return snapshot
 
+
 def dash_is_none(string):
 	if string == '-':
 		return None
 	else:
 		return string
+
 
 def try_unlink(f):
 	try:
@@ -618,7 +577,7 @@ def try_unlink(f):
 
 
 def _prerr(*a):
-	print(*a, file = sys.stderr)
+	print(*a, file=sys.stderr)
 	pass
 
 
@@ -627,4 +586,5 @@ def main():
 
 
 if __name__ == "__main__":
-	main() # pragma: no cover
+	configure_logging_from_env()
+	main()  # pragma: no cover
