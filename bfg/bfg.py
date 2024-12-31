@@ -576,9 +576,9 @@ def try_unlink(f):
 		pass
 
 
-def _prerr(*a):
-	print(*a, file=sys.stderr)
-	pass
+def _prerr(*args, sep=' ', **kwargs):
+	message = sep.join(str(arg) for arg in args)
+	logging.info(message, **kwargs)
 
 
 def main():
