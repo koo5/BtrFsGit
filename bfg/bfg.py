@@ -15,19 +15,46 @@ import shlex  # python 3.8 required (at least for shlex.join)
 from typing import List
 import json
 from .utils import *
+from collections import defaultdict
+import re
+from datetime import datetime
+import math
+
 
 logging.basicConfig(level=logging.INFO)
 
 
-def prompt(*args, **kwargs):
-	try:
-		import PyInquirer
-	except:
-		print(
-			'`import PyInquirer` failed. PyInquirer is needed for interactive prompts:' + str(args) + ' ' + str(kwargs))
-		sys.exit(1)
-	return PyInquirer.prompt(*args, **kwargs)
+def prompt(question):
+		"""Ask a yes/no question via raw_input() and return their answer.
 
+		"question" is a string that is presented to the user.
+		"default" is the presumed answer if the user just hits <Enter>.
+				It must be "yes" (the default), "no" or None (meaning
+				an answer is required of the user).
+
+		The "answer" return value is True for "yes" or False for "no".
+		"""
+		default = "yes"
+
+		valid = {"yes": True, "y": True, "ye": True, "no": False, "n": False}
+		if default is None:
+			prompt = " [y/n] "
+		elif default == "yes":
+			prompt = " [Y/n] "
+		elif default == "no":
+			prompt = " [y/N] "
+		else:
+			raise ValueError("invalid default answer: '%s'" % default)
+
+		while True:
+			sys.stdout.write(question + prompt)
+			choice = input().lower()
+			if default is not None and choice == "":
+				return valid[default]
+			elif choice in valid:
+				return valid[choice]
+			else:
+				sys.stdout.write("Please respond with 'yes' or 'no' " "(or 'y' or 'n').\n")
 
 class Bfg:
 
@@ -52,14 +79,7 @@ class Bfg:
 		"""
 		if s._yes_was_given_on_command_line:
 			return True
-		return prompt(
-			{
-				'type': 'confirm',
-				'name': 'ok',
-				'message': msg + ' ( --YES=True )',
-				'default': False
-			}
-		)['ok']
+		return prompt(msg)
 
 	"""
 
@@ -325,52 +345,181 @@ class Bfg:
 
 
 
-	def prune(s, MACHINE, SUBVOLUME='/'):
-		SUBVOLUME = Path(SUBVOLUME).absolute()
-		parent = Path(s.calculate_default_snapshot_parent_dir(MACHINE, SUBVOLUME).val).parent
-		logging.debug(f'pruning {parent}')
-		snapshots = s.snapshots_by_subvol(parent).val
-		# walk snapshots in increasing age, and delete:
-		# not the newest
-		# not the oldest
-		# from those more recent than one minute, keep the most recent one
-		# from those older than one minute, keep one for each minute
-		# from those older than one hour, keep one for each hour
-		# from those older than one day, keep one for each day
-		# from those older than one month, keep one for each month
-		# delete the rest
+	def snapshots_by_subvol(s, parent: Path):
+		"""
+		Return a dictionary of the form:
+			{
+				subvol_name: [
+					{
+						'ts': '2025-01-02_01-47-21',
+						'dt': datetime(...),
+						'tag': '...',
+						'subvol': 'subvol_name',
+						'fullpath': '/full/path/to/the/snapshot'
+					},
+					...
+				],
+				...
+			}
+		One list per subvolume name. The list is sorted ascending by 'dt'.
+		"""
 
-		for subvol, snapshots in snapshots.items():
-			for i, snapshot in enumerate(snapshots):
-				if i == 0 or i == len(snapshots) - 1:
-					continue
+		def parse_ts(ts_str: str) -> datetime:
+			# Expects something like '2025-01-02_01-47-21'
+			# Adjust this strptime format if your snapshot naming scheme differs
+			return datetime.strptime(ts_str, "%Y-%m-%d_%H-%M-%S")
 
+		def list_dirs(parent: Path) -> List[str]:
+			return [d.name for d in parent.iterdir() if d.is_dir()]
 
+		snapshots_map = defaultdict(list)
 
-	def snapshots_by_subvol(s, parent):
-		"""return a list of snapshots, grouped by subvolume"""
-		snapshots = defaultdict(list)
-		for dir in s.list_dirs(parent):
-			# parse directory name such like d2_bfg_snapshots_2025-01-02_01-47-21_optional_tag'
-			# the _bfg_snapshots part is optional
-			# the optional tag is optional
-			# the date is mandatory
-			# the subvol id is mandatory, and can contain underscores
+		# Ensure parent is a Path
+		parent = Path(parent)
 
-			subvol = re.match(r'(.+)_bfg_snapshots_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dir)
-			if subvol is None:
-				subvol = re.match(r'(.+)_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dir)
-			if subvol is None:
-				_prerr(f'could not parse {dir}')
+		# We’ll need a function that lists the subdirectories under `parent`.
+		# You can adapt this to your environment. For example:
+		#   s.list_dirs(parent) -> returns a list of subdirectory names in `parent`.
+		# For the example here, we assume `list_dirs` returns plain strings (dir names).
+		subdirs = list_dirs(parent)
+
+		for dname in subdirs:
+			# Typical pattern might be:
+			#   <subvol>_bfg_snapshots_<timestamp>_<tag>
+			#   <subvol>_<timestamp>_<tag>
+			# We'll attempt to capture all via two regex tries:
+			m = re.match(r'(.+)_bfg_snapshots_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
+			if m is None:
+				m = re.match(r'(.+)_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
+			if m is None:
+				_prerr(f'could not parse snapshot folder: {dname}')
 				continue
-			subvol = subvol.group(1)
-			snapshots[subvol].append({'ts': subvol.group(2), 'tag': subvol.group(3), 'subvol': subvol})
 
-		# sort snapshots by date
-		for subvol, snapshots in snapshots.items():
-			snapshots.sort(key='ts')
+			subvol_name = m.group(1)
+			ts_str = m.group(2)
+			tag_str = m.group(3)
 
+			try:
+				dt = parse_ts(ts_str)
+			except ValueError:
+				_prerr(f'could not parse date/time from: {ts_str}')
+				continue
 
+			fullpath = str(parent / dname)
+
+			snapshots_map[subvol_name].append({
+				'ts': ts_str,
+				'dt': dt,
+				'tag': tag_str,
+				'subvol': subvol_name,
+				'fullpath': fullpath,
+			})
+
+		# Sort each subvol’s snapshots in ascending date order
+		for subvol_name, snaplist in snapshots_map.items():
+			snaplist.sort(key=lambda s: s['dt'])
+
+		return Res(snapshots_map)
+
+	def prune(s, MACHINE, SUBVOLUME='/'):
+		"""
+		Prune old snapshots under SUBVOLUME according to a time-based retention policy.
+
+		1) Keep the oldest snapshot.
+		2) Keep the newest snapshot.
+		3) For snapshots < 1 minute old, keep only the most recent in that window.
+		4) For snapshots < 1 hour old, keep one per minute.
+		5) For snapshots < 1 day old, keep one per hour.
+		6) For snapshots < 1 month old (~30 days), keep one per day.
+		7) For snapshots >= 1 month old, keep one per month.
+		8) Delete everything else.
+		"""
+
+		SUBVOLUME = Path(SUBVOLUME).absolute()
+		# .val is from the Res(...) pattern in your code
+		snapshot_parent_dir = s.calculate_default_snapshot_parent_dir(MACHINE, SUBVOLUME).val
+		parent = Path(snapshot_parent_dir).parent  # The directory that actually contains the snapshots
+		logging.debug(f'pruning {parent}')
+
+		# We need the snapshots grouped by subvol
+		grouped = s.snapshots_by_subvol(parent).val
+
+		now = datetime.now()
+
+		# Helper to figure out which “bucket” a snapshot goes in
+		# based on its age (compared to the newest snapshot).
+		def bucket(dt: datetime, newest_dt: datetime) -> str:
+			age_seconds = (newest_dt - dt).total_seconds()
+			# Buckets: <1m, 1m–1h => per-minute, 1h–1d => per-hour, 1d–1mo => per-day, >1mo => per-month
+
+			if age_seconds < 60:
+				return "under-1-min"
+
+			elif age_seconds < 3600:
+				# Bucket by minute
+				return dt.strftime("minute-%Y%m%d%H%M")
+
+			elif age_seconds < 86400:
+				# Bucket by hour
+				return dt.strftime("hour-%Y%m%d%H")
+
+			elif age_seconds < 2592000:
+				# ~30 days
+				return dt.strftime("day-%Y%m%d")
+
+			else:
+				return dt.strftime("month-%Y%m")  # year-month
+
+		# Decide how to delete
+		for subvol_name, snaplist in grouped.items():
+			if not snaplist:
+				continue
+
+			if len(snaplist) <= 2:
+				# If there’s 0, 1, or 2 snapshots, we do nothing
+				continue
+
+			# We sort ascending by dt, so oldest => snaplist[0], newest => snaplist[-1]
+			oldest = snaplist[0]
+			newest = snaplist[-1]
+
+			# We keep oldest and newest for sure
+			keep_set = {oldest['fullpath'], newest['fullpath']}
+
+			newest_dt = newest['dt']
+
+			# We'll iterate from newest to oldest (reverse) so that we keep
+			# the *newest* snapshot in each time bucket.
+			# skip the very newest since we already keep it
+			# skip the very oldest until we handle it at the end
+			used_buckets = set()
+			# We already handle newest, so skip last element in iteration
+			middle_snaps = snaplist[1:-1]  # everything except oldest & newest
+
+			for snap in reversed(middle_snaps):
+				dt = snap['dt']
+				b = bucket(dt, newest_dt)
+
+				if b not in used_buckets:
+					used_buckets.add(b)
+					keep_set.add(snap['fullpath'])
+
+			# Now we know which fullpaths we want to keep
+			# We'll remove the rest
+			for snap in snaplist:
+				path = snap['fullpath']
+				if path not in keep_set:
+					# Prompt user or ask for confirmation if you want:
+					cmd = ['btrfs', 'subvolume', 'delete', path]
+					if not s._yes(shlex.join(cmd)):
+						exit(1)
+					if MACHINE == 'remote':
+						s._remote_cmd(cmd)
+					else:
+						s._local_cmd(cmd)
+					_prerr(f"Deleted snapshot: {path}")
+
+		_prerr("Prune completed.")
 
 	def remote_commit(s, REMOTE_SUBVOLUME, TAG=None, SNAPSHOT=None, SNAPSHOT_NAME=None):
 		if TAG and SNAPSHOT:

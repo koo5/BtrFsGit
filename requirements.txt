@@ -6,3 +6,5 @@ six==1.16.0; python_version >= "2.7" and python_full_version < "3.0.0" or python
 termcolor==1.1.0 \
     --hash=sha256:1d6d69ce66211143803fbc56652b41d73b4a400a2891d7bf7a1cdf4c02de613b
 pathvalidate
+#PyInquirer
+git@https://github.com/thunermay/PyInquirer/tree/master
