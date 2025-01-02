@@ -173,7 +173,17 @@ def is_most_recent_common_snapshot(path):
 	pass
 
 
-def update_db():
+def update_db(fss):
+	"""
+	identify filesystems by their uuids.
+	---
+	walk the filesystems:
+		walk each subvol:
+			walk the table and mark missing snapshots as deleted in db
+			walk the snapshots and insert missing snapshots into db
+	---
+
+	"""
 
 	db = conn()
 	c = db.cursor()
