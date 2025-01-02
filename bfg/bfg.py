@@ -106,6 +106,8 @@ class Bfg:
 
 	def calculate_default_snapshot_parent_dir(s, machine: str, SUBVOLUME):
 		"""
+		fixme: in fact calculates also the base of the actual directory now.
+
 		SUBVOLUME: your subvolume (for example /data).
 		Calculate the default snapshot parent dir. In the filesystem tree, it is on the same level as your subvolume, for example `/.bfg_snapshots.data`, if that is still the same filesystem.
 		"""
@@ -141,7 +143,7 @@ class Bfg:
 				snapshot_parent_dir = SUBVOLUME
 
 		return Res(str(Path(
-			str(snapshot_parent_dir) + '/.bfg_snapshots/' + Path(SUBVOLUME).parts[-1] + '_bfg_snapshots').absolute()))
+			str(snapshot_parent_dir) + '/.bfg_snapshots/' + Path(SUBVOLUME).parts[-1]).absolute()))
 
 	def calculate_default_snapshot_path(s, machine, SUBVOLUME, TAG, NAME_OVERRIDE=None):  # , TAG2):
 		"""
@@ -161,7 +163,9 @@ class Bfg:
 				TAG = 'from_' + subprocess.check_output(['hostname'], text=True).strip()
 			name = ts + '_' + TAG
 
-		return Res(str(Path(parent) / (str(parent) + '_' + name)))
+		res = Res(str(Path(str(parent) + '_' + name)))
+		return res
+
 
 	def get_subvol(s, runner, path):
 		out = runner(f'btrfs sub show {path}')
@@ -318,6 +322,55 @@ class Bfg:
 			SNAPSHOT = s.calculate_default_snapshot_path('local', SUBVOLUME, TAG, SNAPSHOT_NAME).val
 		s._local_make_ro_snapshot(SUBVOLUME, SNAPSHOT)
 		return Res(SNAPSHOT)
+
+
+
+	def prune(s, MACHINE, SUBVOLUME='/'):
+		SUBVOLUME = Path(SUBVOLUME).absolute()
+		parent = Path(s.calculate_default_snapshot_parent_dir(MACHINE, SUBVOLUME).val).parent
+		logging.debug(f'pruning {parent}')
+		snapshots = s.snapshots_by_subvol(parent).val
+		# walk snapshots in increasing age, and delete:
+		# not the newest
+		# not the oldest
+		# from those more recent than one minute, keep the most recent one
+		# from those older than one minute, keep one for each minute
+		# from those older than one hour, keep one for each hour
+		# from those older than one day, keep one for each day
+		# from those older than one month, keep one for each month
+		# delete the rest
+
+		for subvol, snapshots in snapshots.items():
+			for i, snapshot in enumerate(snapshots):
+				if i == 0 or i == len(snapshots) - 1:
+					continue
+
+
+
+	def snapshots_by_subvol(s, parent):
+		"""return a list of snapshots, grouped by subvolume"""
+		snapshots = defaultdict(list)
+		for dir in s.list_dirs(parent):
+			# parse directory name such like d2_bfg_snapshots_2025-01-02_01-47-21_optional_tag'
+			# the _bfg_snapshots part is optional
+			# the optional tag is optional
+			# the date is mandatory
+			# the subvol id is mandatory, and can contain underscores
+
+			subvol = re.match(r'(.+)_bfg_snapshots_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dir)
+			if subvol is None:
+				subvol = re.match(r'(.+)_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dir)
+			if subvol is None:
+				_prerr(f'could not parse {dir}')
+				continue
+			subvol = subvol.group(1)
+			snapshots[subvol].append({'ts': subvol.group(2), 'tag': subvol.group(3), 'subvol': subvol})
+
+		# sort snapshots by date
+		for subvol, snapshots in snapshots.items():
+			snapshots.sort(key='ts')
+
+
 
 	def remote_commit(s, REMOTE_SUBVOLUME, TAG=None, SNAPSHOT=None, SNAPSHOT_NAME=None):
 		if TAG and SNAPSHOT:
