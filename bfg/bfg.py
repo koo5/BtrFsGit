@@ -13,12 +13,10 @@ import subprocess
 import fire
 import shlex  # python 3.8 required (at least for shlex.join)
 from typing import List
-import json
 from .utils import *
 from collections import defaultdict
 import re
 from datetime import datetime
-import math
 
 
 logging.basicConfig(level=logging.INFO)
@@ -508,7 +506,7 @@ class Bfg:
 			# We'll remove the rest
 			for snap in snaplist:
 				path = snap['fullpath']
-				if path not in keep_set:
+				if path not in keep_set and not is_most_recent_common_snapshot(path):
 					# Prompt user or ask for confirmation if you want:
 					cmd = ['btrfs', 'subvolume', 'delete', path]
 					if not s._yes(shlex.join(cmd)):

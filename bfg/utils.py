@@ -145,3 +145,16 @@ def load_subvol_dumps():
 	"""
 	return []
 
+
+
+
+
+def is_most_recent_common_snapshot(path):
+	"""
+
+
+
+	"""
+	pass
+
+
