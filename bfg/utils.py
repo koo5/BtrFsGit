@@ -1,5 +1,6 @@
 import logging
 import json
+import psycopg2
 
 
 from bfg.bfg_logging import configure_logging_from_env
@@ -151,10 +152,43 @@ def load_subvol_dumps():
 
 def is_most_recent_common_snapshot(path):
 	"""
+	this whole check is skipped if --disregard-db is given.
+	otherwise, pruning is skipped if we return true here.
+	additional, or different, middle-ground approach, could be to store a snapshot database locally, but such database should allow concurrent operations, so, at least sqlite, a plain file would not be suitable.
+	---
+	identify source and destination filesystems by their uuids.
+	find the most recent common snapshot of subvol between two filesystems by consulting the database.
+	---
+	the database would ideally first be updated to reflect the current state of the filesystems.
+	this is easy locally, but remote hosts can be offline.
+	we could run remote commands, but we'll just rely on each host updating the db by itself (for example after pruning)
+	---
+
+
+
 
 
 
 	"""
 	pass
+
+
+def update_db():
+
+	db = conn()
+	c = db.cursor()
+
+
+
+
+
+def conn():
+	host = 'hours.internal'
+	db = 'bfg'
+	table = 'snapshots'
+	user = 'bfg'
+	password = 'bfg'
+
+	return psycopg2.connect(f"dbname={db} user={user} host={host} password={password}")
 
 
