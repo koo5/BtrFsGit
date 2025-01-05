@@ -282,6 +282,11 @@ class Bfg:
 		logging.debug(f'{snapshots_dir=}')
 		return Res([s for s in r.val if s['path'].startswith(str(snapshots_dir))])
 
+	def update_db_with_local_bfg_snapshots(s, SUBVOLUME):
+		"""update the global database with local snapshots"""
+		snapshots = s.get_local_bfg_snapshots(SUBVOLUME).val
+
+	
 
 	def get_local_subvolumes(s, SUBVOLUME):
 		"""list subvolumes on the local machine"""
