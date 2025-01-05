@@ -12,7 +12,7 @@ import time
 import subprocess
 import fire
 import shlex  # python 3.8 required (at least for shlex.join)
-from typing import List
+from typing import List, Optional
 from .utils import *
 from collections import defaultdict
 import re
@@ -124,7 +124,7 @@ class Bfg:
 
 	def calculate_default_snapshot_parent_dir(s, machine: str, SUBVOLUME):
 		"""
-		fixme: in fact calculates also the base of the actual directory now.
+		fixme: in fact calculates also the base of the actual directory name now.
 
 		SUBVOLUME: your subvolume (for example /data).
 		Calculate the default snapshot parent dir. In the filesystem tree, it is on the same level as your subvolume, for example `/.bfg_snapshots.data`, if that is still the same filesystem.
@@ -234,7 +234,7 @@ class Bfg:
 		_prerr(f'DONE, \n\tpulled {remote_snapshot_path} \n\tinto {SUBVOLUME}\n.')
 		return Res(SUBVOLUME)
 
-	def commit_and_generate_patch(s, SUBVOLUME='/', PATCH_FILE_DIR='/', PARENTS: List[str] = None):
+	def commit_and_generate_patch(s, SUBVOLUME='/', PATCH_FILE_DIR='/', PARENT: Optional[str]=None):
 		"""
 		store a `btrfs send` stream locally
 
@@ -247,7 +247,7 @@ class Bfg:
 		# print(Path(snapshot).parts[-2:])
 		fn = PATCH_FILE_DIR + '/' + '__'.join(Path(snapshot).parts[-2:])
 		# print(fn)
-		s.local_send(snapshot, ' > ' + fn, PARENTS)
+		s.local_send(snapshot, ' > ' + fn, PARENT)
 		_prerr(f'DONE, generated patch \n\tfrom {snapshot} \n\tinto {fn}\n.')
 		return Res(fn)
 
@@ -262,6 +262,30 @@ class Bfg:
 
 	basic commands
 	"""
+
+
+
+	def get_local_subvol(s, SUBVOLUME):
+		"""get info about a subvolume"""
+		return s.get_subvol(s._local_cmd, SUBVOLUME)
+
+	def get_local_snapshots(s, SUBVOLUME):
+		uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
+		snapshots = s._get_subvolumes(s._local_cmd, SUBVOLUME)
+		snapshots = [s for s in snapshots if s['parent_uuid'] == uuid and s['ro']]
+		return Res(snapshots)
+
+	def get_local_bfg_snapshots(s, SUBVOLUME):
+		"""list snapshots in .bfg_snapshots"""
+		r = s.get_local_snapshots(SUBVOLUME)
+		snapshots_dir = s.calculate_default_snapshot_parent_dir('local', SUBVOLUME).val
+		logging.debug(f'{snapshots_dir=}')
+		return Res([s for s in r.val if s['path'].startswith(str(snapshots_dir))])
+
+
+	def get_local_subvolumes(s, SUBVOLUME):
+		"""list subvolumes on the local machine"""
+		return Res(s._get_subvolumes(s._local_cmd, SUBVOLUME))
 
 	def checkout_local(s, SNAPSHOT, SUBVOLUME):
 		"""stash your SUBVOLUME, and replace it with SNAPSHOT"""
@@ -576,6 +600,7 @@ class Bfg:
 		_prerr(f'DONE, \n\tpulled {REMOTE_SNAPSHOT} \n\tinto {local_snapshot}\n.')
 		return Res(local_snapshot)
 
+
 	"""
 
 	low-level operations
@@ -609,7 +634,7 @@ class Bfg:
 
 		return parents_args
 
-	def local_send(s, SNAPSHOT, target, PARENT, CLONESRCS):
+	def local_send(s, SNAPSHOT, target, PARENT, CLONESRCS=[]):
 		parents_args = s._parent_args(PARENT, CLONESRCS)
 
 		# _prerr((str(parents_args)) + ' #...')
@@ -685,8 +710,8 @@ class Bfg:
 
 	def _parent_candidates(s, subvolume, remote_subvolume, my_uuid, direction):
 
-		remote_subvols = _get_subvolumes(s._remote_cmd, remote_subvolume)
-		local_subvols = _get_subvolumes(s._local_cmd, subvolume)
+		remote_subvols = s._get_subvolumes(s._remote_cmd, remote_subvolume)
+		local_subvols = s._get_subvolumes(s._local_cmd, subvolume)
 		other_subvols = load_subvol_dumps()
 		toplevel_subvol = s.get_subvol(s._local_cmd, subvolume).val
 		toplevel_subvols = [toplevel_subvol]
@@ -718,48 +743,53 @@ class Bfg:
 		yield from VolWalker(all_subvols2, direction).walk(my_uuid)
 
 
-def _get_subvolumes(command_runner, subvolume):
-	"""
-	:param subvolume: filesystem path to a subvolume on the filesystem that we want to get a list of subvolumes of
-	:return: list of subvolume records
-	"""
-	subvols = []
-	cmd = ['btrfs', 'subvolume', 'list', '-q', '-t', '-R', '-u']
-	for line in command_runner(cmd + [subvolume]).splitlines()[2:]:
-		subvol = _make_snapshot_struct_from_sub_list_output_line(line)
-		subvols.append(subvol)
-
-	ro_subvols = set()
-	for line in command_runner(cmd + ['-r', subvolume]).splitlines()[2:]:
-		subvol = _make_snapshot_struct_from_sub_list_output_line(line)
-		ro_subvols.add(subvol['local_uuid'])
-	# _prerr(str(ro_subvols))
-
-	for i in subvols:
-		ro = i['local_uuid'] in ro_subvols
-		i['ro'] = ro
-	# _prerr(str(i))
-
-	subvols.sort(key=lambda sv: -sv['subvol_id'])
-	return subvols
 
 
-def _make_snapshot_struct_from_sub_list_output_line(line):
-	logging.debug(line)
-	items = line.split()
-	subvol_id = items[0]
-	parent_uuid = dash_is_none(items[3])
-	received_uuid = dash_is_none(items[4])
-	local_uuid = items[5]
 
-	snapshot = {}
-	snapshot['received_uuid'] = received_uuid
-	snapshot['parent_uuid'] = parent_uuid
-	snapshot['local_uuid'] = local_uuid
-	snapshot['subvol_id'] = int(subvol_id)
-	logging.debug(snapshot)
+	def _get_subvolumes(s, command_runner, subvolume):
+		"""
+		:param subvolume: filesystem path to a subvolume on the filesystem that we want to get a list of subvolumes of
+		:return: list of records, one for each subvolume on the filesystem
+		"""
+		subvols = []
 
-	return snapshot
+		cmd = ['btrfs', 'subvolume', 'list', '-q', '-t', '-R', '-u']
+		for line in command_runner(cmd + [subvolume]).splitlines()[2:]:
+			subvol = s._make_snapshot_struct_from_sub_list_output_line(line)
+			subvols.append(subvol)
+
+		ro_subvols = set()
+		for line in command_runner(cmd + ['-r', subvolume]).splitlines()[2:]:
+			subvol = s._make_snapshot_struct_from_sub_list_output_line(line)
+			ro_subvols.add(subvol['local_uuid'])
+		# _prerr(str(ro_subvols))
+
+		for i in subvols:
+			ro = i['local_uuid'] in ro_subvols
+			i['ro'] = ro
+		# _prerr(str(i))
+
+		subvols.sort(key=lambda sv: -sv['subvol_id'])
+		return subvols
+
+
+	def _make_snapshot_struct_from_sub_list_output_line(s, line):
+		#logging.debug('line:'+line)
+		items = line.split()
+		subvol_id = items[0]
+		parent_uuid = dash_is_none(items[3])
+		received_uuid = dash_is_none(items[4])
+		local_uuid = items[5]
+
+		snapshot = {}
+		snapshot['received_uuid'] = received_uuid
+		snapshot['parent_uuid'] = parent_uuid
+		snapshot['local_uuid'] = local_uuid
+		snapshot['subvol_id'] = int(subvol_id)
+		snapshot['path'] = str(Path(s._local_fs_id5_mount_point +'/'+items[6]))
+		logging.debug(snapshot)
+
+		return snapshot
 
 
 def dash_is_none(string):
