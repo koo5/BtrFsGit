@@ -17,6 +17,8 @@ from .utils import *
 from collections import defaultdict
 import re
 from datetime import datetime
+import bfg.db
+
 
 
 logging.basicConfig(level=logging.INFO)
@@ -117,7 +119,6 @@ class Bfg:
 				return -1
 
 	"""
-
 
 	helper stuff
 	"""
@@ -283,10 +284,19 @@ class Bfg:
 		return Res([s for s in r.val if s['path'].startswith(str(snapshots_dir))])
 
 	def update_db_with_local_bfg_snapshots(s, SUBVOLUME):
-		"""update the global database with local snapshots"""
+		"""
+		update the global database with local snapshots:
+			walk the snapshots and insert missing snapshots into db
+			walk the table and mark missing snapshots as deleted in db
+		"""
 		snapshots = s.get_local_bfg_snapshots(SUBVOLUME).val
 
-	
+		session = db.session()
+
+
+
+
+
 
 	def get_local_subvolumes(s, SUBVOLUME):
 		"""list subvolumes on the local machine"""
@@ -448,7 +458,7 @@ class Bfg:
 
 		return Res(snapshots_map)
 
-	def prune(s, MACHINE, SUBVOLUME='/'):
+	def prune(s, SUBVOLUME, CHECK_WITH_DB=True):
 		"""
 		Prune old snapshots under SUBVOLUME according to a time-based retention policy.
 

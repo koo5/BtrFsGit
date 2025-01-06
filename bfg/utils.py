@@ -1,6 +1,5 @@
 import logging
 import json
-import psycopg2
 
 
 from bfg.bfg_logging import configure_logging_from_env
@@ -171,34 +170,4 @@ def is_most_recent_common_snapshot(path):
 
 	"""
 	pass
-
-
-def update_db(fss):
-	"""
-	identify filesystems by their uuids.
-	---
-	walk the filesystems:
-		walk each subvol:
-			walk the table and mark missing snapshots as deleted in db
-			walk the snapshots and insert missing snapshots into db
-	---
-
-	"""
-
-	db = conn()
-	c = db.cursor()
-
-
-
-
-
-def conn():
-	host = 'hours.internal'
-	db = 'bfg'
-	table = 'snapshots'
-	user = 'bfg'
-	password = 'bfg'
-
-	return psycopg2.connect(f"dbname={db} user={user} host={host} password={password}")
-
 
