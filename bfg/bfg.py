@@ -8,6 +8,11 @@ import logging
 from bfg.bfg_logging import configure_logging
 configure_logging()
 
+logbtrfs = logging.getLogger('btrfs')
+logutils = logging.getLogger('utils')
+logbfg = logging.getLogger('bfg')
+
+
 from pathlib import Path
 from pathvalidate import sanitize_filename
 import sys, os
@@ -206,7 +211,7 @@ class Bfg:
 		sv['ro'] = lines[11].split()[1] == 'readonly'
 
 		r = Res(sv)
-		logging.debug('get_subvol: %s', str(sv))
+		logbtrfs.debug('get_subvol: %s', str(sv))
 		return r
 
 	"""
@@ -280,13 +285,13 @@ class Bfg:
 
 
 	def get_local_snapshots(s, SUBVOLUME):
-		logging.debug(f'get_local_snapshots...')
+		logbtrfs.debug(f'get_local_snapshots...')
 		uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
 		snapshots = s._get_subvolumes(s._local_cmd, SUBVOLUME)
 		snapshots = [s for s in snapshots if s['parent_uuid'] == uuid and s['ro']]
 		for snapshot in snapshots:
 			snapshot['host'] = s.host
-		logging.debug(f'get_local_snapshots: {len(snapshots)=}')
+		logbtrfs.info(f'get_local_snapshots: {len(snapshots)=}')
 		return Res(snapshots)
 
 
@@ -294,16 +299,16 @@ class Bfg:
 		"""list snapshots in .bfg_snapshots"""
 		local_snapshots = s.get_local_snapshots(SUBVOLUME).val
 		snapshots_dir = s.calculate_default_snapshot_parent_dir('local', SUBVOLUME).val
-		logging.debug(f'get_local_bfg_snapshots...');
-		logging.debug(f'get_local_bfg_snapshots: {snapshots_dir=}')
+		logbfg.debug(f'get_local_bfg_snapshots...');
+		logbfg.debug(f'get_local_bfg_snapshots: {snapshots_dir=}')
 		result = []
-		logging.info(f'get_local_bfg_snapshots: {len(local_snapshots)=}')
+		logbfg.info(f'get_local_bfg_snapshots: {len(local_snapshots)=}')
 		for snapshot in local_snapshots:
-			logging.debug(f'get_local_bfg_snapshots: {snapshots_dir=} vs {snapshot=}')
+			logbfg.debug(f'get_local_bfg_snapshots: {snapshots_dir=} vs {snapshot=}')
 			if snapshot['path'].startswith(str(snapshots_dir)):
-				logging.debug(f'get_local_bfg_snapshots: YES')
+				logbfg.debug(f'get_local_bfg_snapshots: YES')
 				result.append(snapshot)
-		logging.info(f'get_local_bfg_snapshots: {len(result)=}')
+		logbfg.info(f'get_local_bfg_snapshots: {len(result)=}')
 		return Res(result)
 
 
@@ -314,13 +319,13 @@ class Bfg:
 			walk the table and mark missing snapshots as deleted in db
 		"""
 		snapshots = s.get_local_bfg_snapshots(SUBVOLUME).val
-		logging.debug(f'db.session()...')
+		logbfg.debug(f'db.session()...')
 		session = db.session()
 		with session.begin():
 			for snapshot in snapshots:
-				logging.debug(f'{snapshot=}')
+				logbfg.debug(f'{snapshot=}')
 				db_snapshot = session.query(db.Snapshot).get(snapshot['local_uuid'])
-				logging.debug(f'{db_snapshot=}')
+				logbfg.debug(f'{db_snapshot=}')
 				if db_snapshot is None:
 					db_snapshot = db.Snapshot(
 						uuid=snapshot['local_uuid'],
@@ -809,12 +814,12 @@ class Bfg:
 		subvols = []
 
 		cmd = ['btrfs', 'subvolume', 'list', '-q', '-t', '-R', '-u']
-		for line in command_runner(cmd + [subvolume]).splitlines()[2:]:
+		for line in command_runner(cmd + [subvolume], logger=logbtrfs).splitlines()[2:]:
 			subvol = s._make_snapshot_struct_from_sub_list_output_line(line)
 			subvols.append(subvol)
 
 		ro_subvols = set()
-		for line in command_runner(cmd + ['-r', subvolume]).splitlines()[2:]:
+		for line in command_runner(cmd + ['-r', subvolume], logger=logbtrfs).splitlines()[2:]:
 			subvol = s._make_snapshot_struct_from_sub_list_output_line(line)
 			ro_subvols.add(subvol['local_uuid'])
 		# _prerr(str(ro_subvols))
@@ -825,6 +830,7 @@ class Bfg:
 		# _prerr(str(i))
 
 		subvols.sort(key=lambda sv: -sv['subvol_id'])
+		logbtrfs.debug(f'_get_subvolumes: {len(subvols)=}')
 		return subvols
 
 
