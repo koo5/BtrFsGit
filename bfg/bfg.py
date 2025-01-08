@@ -312,7 +312,7 @@ class Bfg:
 
 	def get_local_bfg_snapshots_on_filesystem(s):
 		"""list all read-only subvolumes on the filesystem that exist somewhere under any .bfg_snapshots dir"""
-		logbfg.debug(f'get_local_bfg_snapshots_on_filesystem...')
+		logbfg.info	(f'get_local_bfg_snapshots_on_filesystem...')
 		logger = logging.getLogger('get_local_bfg_snapshots_on_filesystem')
 		subvols = s._get_subvolumes(s._local_cmd, s._local_fs_id5_mount_point)
 		logger.debug(f'{subvols=}')
@@ -358,10 +358,13 @@ class Bfg:
 			walk the table and mark missing snapshots as deleted in db
 		"""
 		snapshots = s.get_local_bfg_snapshots_on_filesystem().val
-		logbfg.debug(f'db.session()...')
+		logbfg.info(f'db.session()...')
 		session = db.session()
 		with session.begin():
-			for snapshot in snapshots:
+			logbfg.info(f'insert missing snapshots into db...')
+			for i,snapshot in enumerate(snapshots):
+				if i % 10 == 0:
+					logbfg.info(f'{i=}')
 				logbfg.debug(f'{snapshot=}')
 				db_snapshot = session.query(db.Snapshot).get(snapshot['local_uuid'])
 				logbfg.debug(f'{db_snapshot=}')
@@ -376,6 +379,7 @@ class Bfg:
 					session.add(db_snapshot)
 				else:
 					db_snapshot.deleted = False
+			logbfg.info(f'mark missing snapshots as deleted in db...')
 			for db_snapshot in session.query(db.Snapshot).all():
 				if db_snapshot.uuid not in [s['local_uuid'] for s in snapshots]:
 					db_snapshot.deleted = True
