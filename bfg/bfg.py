@@ -291,6 +291,7 @@ class Bfg:
 		logger = logging.getLogger('get_local_snapshots')
 		uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
 		subvols = s._get_subvolumes(s._local_cmd, SUBVOLUME)
+		logger.debug(f'{subvols=}')
 
 		snapshots = []
 		for subvol in subvols:
