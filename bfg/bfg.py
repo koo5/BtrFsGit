@@ -273,11 +273,13 @@ class Bfg:
 
 
 	def get_local_snapshots(s, SUBVOLUME):
+		logging.debug(f'get_local_snapshots...')
 		uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
 		snapshots = s._get_subvolumes(s._local_cmd, SUBVOLUME)
 		snapshots = [s for s in snapshots if s['parent_uuid'] == uuid and s['ro']]
 		for snapshot in snapshots:
 			snapshot['host'] = s.host
+		logging.debug(f'get_local_snapshots: {len(snapshots)=}')
 		return Res(snapshots)
 
 
