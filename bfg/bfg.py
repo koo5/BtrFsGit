@@ -299,6 +299,8 @@ class Bfg:
 			if subvol['parent_uuid'] == uuid and subvol['ro']:
 				logger.debug(f'YES')
 				snapshots.append(subvol)
+			else:
+				logger.debug(f'NO')
 
 		for snapshot in snapshots:
 			snapshot['host'] = s.host
