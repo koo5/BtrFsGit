@@ -17,11 +17,13 @@ class Base(DeclarativeBase):
 
 class Snapshot(Base):
 	__tablename__ = "snapshots"
-	uuid: Mapped[str] = mapped_column(primary_key=True)
+	local_uuid: Mapped[str] = mapped_column(primary_key=True)
 	parent_uuid: Mapped[Optional[str]] = mapped_column()
 	received_uuid: Mapped[Optional[str]] = mapped_column()
-	host: Mapped[Optional[str]] = mapped_column()
+	host: Mapped[str] = mapped_column()
+	fs: Mapped[str] = mapped_column()
 	path: Mapped[str] = mapped_column()
+	deleted: Mapped[bool] = mapped_column()
 
 
 
@@ -36,7 +38,7 @@ def get_engine():
 
 	#return psycopg2.connect(f"dbname={db} user={user} host={host} password={password}")
 
-	conn_str = f"postgresql+psycopg2://{user}:{password}@{host}/{db}"
+	conn_str = f"postgresql+psycopg2://{user}:{password}@{host}/{db}" # postgresql://bfg:bfg@hours.internal/bfg
 	l = logging.getLogger('sqlalchemy').getEffectiveLevel()
 	engine = create_engine(conn_str, echo=(l < 20))
 	Base.metadata.create_all(engine)
