@@ -144,7 +144,9 @@ class Bfg:
 		SUBVOLUME = Path(SUBVOLUME)
 		parent = SUBVOLUME.parent
 
-		logging.getLogger('utils').info(f'calculate_default_snapshot_parent_dir for {SUBVOLUME=}')
+		logger = logging.getLogger('calculate_default_snapshot_parent_dir')
+
+		logger.debug(f'calculate_default_snapshot_parent_dir for {SUBVOLUME=}')
 
 		# is parent the same filesystem as SUBVOLUME? if not, then SUBVOLUME is the top level subvolume, and we need to make the snapshot inside it, rather than outside.
 
@@ -153,19 +155,19 @@ class Bfg:
 		else:
 			runner = s._remote_cmd
 
-		if runner(['test', '-e', str(SUBVOLUME)], die_on_error=False) == -1:
+		if runner(['test', '-e', str(SUBVOLUME)], die_on_error=False, logger=logger) == -1:
 			# we assume that if the target filesystem is mounted. This implies that if we're transferring the root subvol, the directory exists. This is the only case where the snapshot parent dir will be inside the subvol, rather than outside. Therefore, if the destination does not exist (as a directory or subvolume), it is safe to assume that it is not the root subvolume.
 			snapshot_parent_dir = parent
 		else:
 
-			runner(['mkdir', '-p', str(SUBVOLUME)])
+			runner(['mkdir', '-p', str(SUBVOLUME)], logger=logger)
 
 			# hope to come up with a unique file names:
 			f1 = str(time.time())
 			f2 = f1 + "_dest"
-			runner(['touch', str(SUBVOLUME / f1)])
+			runner(['touch', str(SUBVOLUME / f1)], logger=logger)
 
-			if runner(['cp', '--reflink', SUBVOLUME / f1, parent / f2], die_on_error=False) != -1:
+			if runner(['cp', '--reflink', SUBVOLUME / f1, parent / f2], die_on_error=False, logger=logger) != -1:
 				snapshot_parent_dir = parent
 			else:
 				_prerr(
@@ -174,7 +176,7 @@ class Bfg:
 
 		r = str(Path(
 			str(snapshot_parent_dir) + '/.bfg_snapshots/' + Path(SUBVOLUME).parts[-1]).absolute())
-		logging.getLogger('utils').info(f'calculate_default_snapshot_parent_dir: {r=}')
+		logging.getLogger('utils').info(f'calculate_default_snapshot_parent_dir: {SUBVOLUME=} -> {r=}')
 		return Res(r)
 
 	def calculate_default_snapshot_path(s, machine, SUBVOLUME, TAG, NAME_OVERRIDE=None):  # , TAG2):
