@@ -380,7 +380,9 @@ class Bfg:
 				else:
 					db_snapshot.deleted = False
 			logbfg.info(f'mark missing snapshots as deleted in db...')
-			for db_snapshot in session.query(db.Snapshot).all():
+			for i,db_snapshot in enumerate(session.query(db.Snapshot).all()):
+				if i % 10 == 0:
+					logbfg.info(f'{i=}')
 				if db_snapshot.uuid not in [s['local_uuid'] for s in snapshots]:
 					db_snapshot.deleted = True
 
