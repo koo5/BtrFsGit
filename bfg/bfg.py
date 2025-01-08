@@ -385,6 +385,7 @@ class Bfg:
 					logbfg.info(f'{i=}')
 				if db_snapshot.uuid not in [s['local_uuid'] for s in snapshots]:
 					db_snapshot.deleted = True
+			logbfg.info(f'commit...')
 
 
 
