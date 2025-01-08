@@ -391,7 +391,8 @@ class Bfg:
 						received_uuid=snapshot['received_uuid'],
 						host=snapshot['host'],
 						fs=s._local_fs_id5_mount_point,
-						path=snapshot['path']
+						path=snapshot['path'],
+						fs_uuid=snapshot['fs_uuid']
 					)
 					session.add(db_snapshot)
 			logbfg.info(f'mark missing snapshots as deleted in db...')
