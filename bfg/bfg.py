@@ -287,6 +287,7 @@ class Bfg:
 
 
 	def get_local_snapshots(s, SUBVOLUME):
+		"""list snapshots of SUBVOLUME on the local machine, that is, all read-only subvolumes on the filesystem, that are children of SUBVOLUME"""
 		logbtrfs.debug(f'get_local_snapshots...')
 		logger = logging.getLogger('get_local_snapshots')
 		uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
@@ -309,6 +310,29 @@ class Bfg:
 		return Res(snapshots)
 
 
+	def get_local_bfg_snapshots_on_filesystem(s, SUBVOLUME):
+		"""list all read-only subvolumes on the filesystem that exist somewhere under any .bfg_snapshots dir"""
+		logbtrfs.debug(f'get_local_bfg_snapshots_on_filesystem...')
+		logger = logging.getLogger('get_local_bfg_snapshots_on_filesystem')
+		subvols = s._get_subvolumes(s._local_cmd, SUBVOLUME)
+		logger.debug(f'{subvols=}')
+
+		snapshots = []
+		for subvol in subvols:
+			logger.debug(f'{subvol=}')
+			if subvol['ro'] and ('.bfg_snapshots' in Path(subvol['path']).parts):
+				logger.debug(f'YES')
+				snapshots.append(subvol)
+			else:
+				logger.debug(f'NO')
+
+		for snapshot in snapshots:
+			snapshot['host'] = s.host
+
+		logbtrfs.info(f'get_local_bfg_snapshots_on_filesystem: {len(snapshots)=}')
+		return Res(snapshots)
+
+
 	def get_local_bfg_snapshots(s, SUBVOLUME):
 		"""list snapshots in .bfg_snapshots"""
 		local_snapshots = s.get_local_snapshots(SUBVOLUME).val
@@ -328,6 +352,8 @@ class Bfg:
 
 	def update_db_with_local_bfg_snapshots(s, SUBVOLUME):
 		"""
+		the SUBVOLUME argument is misleading here, because we're not going to try to figure out if a given snapshot belongs to a given subvolume. We just blast the db with all the snapshots we can find in the relevant .bfg_snapshots dir.
+
 		update the global database with local snapshots:
 			walk the snapshots and insert missing snapshots into db
 			walk the table and mark missing snapshots as deleted in db
