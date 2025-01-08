@@ -17,13 +17,14 @@ class Base(DeclarativeBase):
 
 class Snapshot(Base):
 	__tablename__ = "snapshots"
+	fs_uuid: Mapped[str] = mapped_column(nullable=False)
 	local_uuid: Mapped[str] = mapped_column(primary_key=True)
 	parent_uuid: Mapped[Optional[str]] = mapped_column()
 	received_uuid: Mapped[Optional[str]] = mapped_column()
-	host: Mapped[str] = mapped_column()
-	fs: Mapped[str] = mapped_column()
-	path: Mapped[str] = mapped_column()
-	deleted: Mapped[bool] = mapped_column()
+	host: Mapped[str] = mapped_column(nullable=False)
+	fs: Mapped[str] = mapped_column(nullable=False)
+	path: Mapped[str] = mapped_column(nullable=False)
+	deleted: Mapped[bool] = mapped_column(default=False, nullable=False)
 
 
 

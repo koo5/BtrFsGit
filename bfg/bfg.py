@@ -68,6 +68,7 @@ class Bfg:
 				 YES=False):
 
 		s._local_fs_id5_mount_point = LOCAL_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT
+
 		s._remote_fs_id5_mount_point = REMOTE_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT
 		s._yes_was_given_on_command_line = YES
 		s._sshstr = sshstr
@@ -79,6 +80,8 @@ class Bfg:
 		s._local_str = '(here)'
 		s._sudo = ['sudo']
 		s.host = subprocess.check_output(['hostname'], text=True).strip()
+		s._local_fs_uuid = s.get_fs()
+
 
 	def _yes(s, msg):
 		"""
@@ -201,6 +204,14 @@ class Bfg:
 		return res
 
 
+	def get_fs(s):
+		l = s._local_cmd(f'btrfs filesystem show ' + s._local_fs_id5_mount_point).splitlines()[0]
+		r = r"Label:\s+'.*'\s+uuid:\s+([a-f0-9-]+)$"
+		fs_uuid = re.match(r, l).group(1)
+		logbfg.info(f'get_fs: {fs_uuid=}')
+		return fs_uuid
+
+
 	def get_subvol(s, runner, path):
 		out = runner(f'btrfs sub show {path}')
 		lines = out.splitlines()
@@ -320,6 +331,8 @@ class Bfg:
 		snapshots = []
 		for subvol in subvols:
 			logger.debug(f'{subvol=}')
+			subvol['fs_uuid'] = s._local_fs_uuid
+
 			if subvol['ro'] and ('.bfg_snapshots' in Path(subvol['path']).parts):
 				logger.debug(f'YES')
 				snapshots.append(subvol)
