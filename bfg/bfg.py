@@ -284,9 +284,10 @@ class Bfg:
 		snapshot = s.local_commit(SUBVOLUME, SNAPSHOT_TAG, SNAPSHOT_PATH, SNAPSHOT_NAME).val
 		return Res(s.push(SUBVOLUME, snapshot, REMOTE_SUBVOLUME, PARENT, CLONESRCS).val)
 
+
+
+
 	"""
-
-
 	basic commands
 	"""
 
@@ -295,6 +296,23 @@ class Bfg:
 	def get_local_subvol(s, SUBVOLUME):
 		"""get info about a subvolume"""
 		return s.get_subvol(s._local_cmd, SUBVOLUME)
+
+
+
+	def get_local_bfg_snapshots_for_subvol(s, SUBVOLUME):
+		"""list snapshots in .bfg_snapshots"""
+		local_snapshots = s.get_local_snapshots(SUBVOLUME).val
+		logbfg.debug(f'get_local_bfg_snapshots_for_subvol: {snapshots_dir=}')
+		logger = logging.getLogger('get_local_bfg_snapshots_for_subvol')
+		result = []
+		for snapshot in local_snapshots:
+			logger.debug(f'{snapshot=}')
+			if '.bfg_snapshots' in Path(subvol['path']).parts:
+				logger.debug(f'YES')
+				result.append(snapshot)
+		logbfg.info(f'get_local_bfg_snapshots_for_subvol: {len(result)=}')
+		return Res(result)
+
 
 
 	def get_local_snapshots(s, SUBVOLUME):
@@ -314,17 +332,14 @@ class Bfg:
 			else:
 				logger.debug(f'NO')
 
-		for snapshot in snapshots:
-			snapshot['host'] = s.host
-
 		logbtrfs.info(f'get_local_snapshots: {len(snapshots)=}')
 		return Res(snapshots)
 
 
-	def get_local_bfg_snapshots_on_filesystem(s):
+	def get_all_local_bfg_snapshots_on_filesystem(s):
 		"""list all read-only subvolumes on the filesystem that exist somewhere under any .bfg_snapshots dir"""
-		logbfg.info	(f'get_local_bfg_snapshots_on_filesystem...')
-		logger = logging.getLogger('get_local_bfg_snapshots_on_filesystem')
+		logbfg.info	(f'get_all_local_bfg_snapshots_on_filesystem...')
+		logger = logging.getLogger('get_all_local_bfg_snapshots_on_filesystem')
 		subvols = s._get_subvolumes(s._local_cmd, s._local_fs_id5_mount_point)
 		logger.debug(f'{subvols=}')
 
@@ -342,25 +357,9 @@ class Bfg:
 		for snapshot in snapshots:
 			snapshot['host'] = s.host
 
-		logbtrfs.info(f'get_local_bfg_snapshots_on_filesystem: {len(snapshots)=}')
+		logbtrfs.info(f'get_all_local_bfg_snapshots_on_filesystem: {len(snapshots)=}')
 		return Res(snapshots)
 
-
-	def get_local_bfg_snapshots(s, SUBVOLUME):
-		"""list snapshots in .bfg_snapshots"""
-		local_snapshots = s.get_local_snapshots(SUBVOLUME).val
-		snapshots_dir = s.calculate_default_snapshot_parent_dir('local', SUBVOLUME).val
-		logbfg.debug(f'get_local_bfg_snapshots...');
-		logbfg.debug(f'get_local_bfg_snapshots: {snapshots_dir=}')
-		result = []
-		logbfg.info(f'get_local_bfg_snapshots: {len(local_snapshots)=}')
-		for snapshot in local_snapshots:
-			logbfg.debug(f'get_local_bfg_snapshots: {snapshots_dir=} vs {snapshot=}')
-			if snapshot['path'].startswith(str(snapshots_dir)):
-				logbfg.debug(f'get_local_bfg_snapshots: YES')
-				result.append(snapshot)
-		logbfg.info(f'get_local_bfg_snapshots: {len(result)=}')
-		return Res(result)
 
 
 	def update_db_with_local_bfg_snapshots(s):
@@ -370,7 +369,7 @@ class Bfg:
 			walk the snapshots and insert missing snapshots into db
 			walk the table and mark missing snapshots as deleted in db
 		"""
-		snapshots = s.get_local_bfg_snapshots_on_filesystem().val
+		snapshots = s.get_all_local_bfg_snapshots_on_filesystem().val
 		logbfg.info(f'db.session()...')
 		session = db.session()
 		with session.begin():
@@ -413,12 +412,16 @@ class Bfg:
 		"""list subvolumes on the local machine"""
 		return Res(s._get_subvolumes(s._local_cmd, SUBVOLUME))
 
+
+
 	def checkout_local(s, SNAPSHOT, SUBVOLUME):
 		"""stash your SUBVOLUME, and replace it with SNAPSHOT"""
 		s.stash_local(SUBVOLUME)
 		s._local_cmd(f'btrfs subvolume snapshot {SNAPSHOT} {SUBVOLUME}')
 		_prerr(f'DONE {s._local_str}, \n\tchecked out {SNAPSHOT} \n\tinto {SUBVOLUME}\n.')
 		return Res(SUBVOLUME)
+
+
 
 	def checkout_remote(s, SNAPSHOT, SUBVOLUME):
 		"""ssh into the other machine,
@@ -427,6 +430,8 @@ class Bfg:
 		s._remote_cmd(f'btrfs subvolume snapshot {SNAPSHOT} {SUBVOLUME}')
 		_prerr(f'DONE {s._remote_str}, \n\tchecked out {SNAPSHOT} \n\tinto {SUBVOLUME}\n.')
 		return Res(SUBVOLUME)
+
+
 
 	def stash_local(s, SUBVOLUME, SNAPSHOT_TAG='stash', SNAPSHOT_NAME=None):
 		"""
@@ -449,6 +454,8 @@ class Bfg:
 			_prerr(f'DONE {s._local_str}, \n\tsnapshotted {SUBVOLUME} into \n\t{snapshot}\n, and deleted it.')
 			return Res(snapshot)
 
+
+
 	def stash_remote(s, SUBVOLUME):
 		"""snapshot and delete your SUBVOLUME"""
 		if s._remote_cmd(['test', '-e', SUBVOLUME], die_on_error=False) == -1:
@@ -467,6 +474,8 @@ class Bfg:
 
 			_prerr(f'DONE {s._remote_str}, \n\tsnapshotted {SUBVOLUME} \n\tinto {snapshot}\n, and deleted it.')
 			return Res(snapshot)
+
+
 
 	def local_commit(s, SUBVOLUME='/', TAG=None, SNAPSHOT=None, SNAPSHOT_NAME=None):
 		"""
@@ -493,81 +502,83 @@ class Bfg:
 
 
 
-	def snapshots_by_subvol(s, parent: Path):
-		"""
-		Return a dictionary of the form:
-			{
-				subvol_name: [
-					{
-						'ts': '2025-01-02_01-47-21',
-						'dt': datetime(...),
-						'tag': '...',
-						'subvol': 'subvol_name',
-						'fullpath': '/full/path/to/the/snapshot'
-					},
-					...
-				],
-				...
-			}
-		One list per subvolume name. The list is sorted ascending by 'dt'.
-		"""
+	# def snapshots_by_subvol(s, parent: Path):
+	# 	"""
+	# 	Return a dictionary of the form:
+	# 		{
+	# 			subvol_name: [
+	# 				{
+	# 					'ts': '2025-01-02_01-47-21',
+	# 					'dt': datetime(...),
+	# 					'tag': '...',
+	# 					'subvol': 'subvol_name',
+	# 					'fullpath': '/full/path/to/the/snapshot'
+	# 				},
+	# 				...
+	# 			],
+	# 			...
+	# 		}
+	# 	One list per subvolume name. The list is sorted ascending by 'dt'.
+	# 	"""
+	#
+	# 	def parse_ts(ts_str: str) -> datetime:
+	# 		# Expects something like '2025-01-02_01-47-21'
+	# 		# Adjust this strptime format if your snapshot naming scheme differs
+	# 		return datetime.strptime(ts_str, "%Y-%m-%d_%H-%M-%S")
+	#
+	# 	def list_dirs(parent: Path) -> List[str]:
+	# 		return [d.name for d in parent.iterdir() if d.is_dir()]
+	#
+	# 	snapshots_map = defaultdict(list)
+	#
+	# 	# Ensure parent is a Path
+	# 	parent = Path(parent)
+	#
+	# 	# We’ll need a function that lists the subdirectories under `parent`.
+	# 	# You can adapt this to your environment. For example:
+	# 	#   s.list_dirs(parent) -> returns a list of subdirectory names in `parent`.
+	# 	# For the example here, we assume `list_dirs` returns plain strings (dir names).
+	# 	subdirs = list_dirs(parent)
+	#
+	# 	for dname in subdirs:
+	# 		# Typical pattern might be:
+	# 		#   <subvol>_bfg_snapshots_<timestamp>_<tag>
+	# 		#   <subvol>_<timestamp>_<tag>
+	# 		# We'll attempt to capture all via two regex tries:
+	# 		m = re.match(r'(.+)_bfg_snapshots_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
+	# 		if m is None:
+	# 			m = re.match(r'(.+)_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
+	# 		if m is None:
+	# 			_prerr(f'could not parse snapshot folder: {dname}')
+	# 			continue
+	#
+	# 		subvol_name = m.group(1)
+	# 		ts_str = m.group(2)
+	# 		tag_str = m.group(3)
+	#
+	# 		try:
+	# 			dt = parse_ts(ts_str)
+	# 		except ValueError:
+	# 			_prerr(f'could not parse date/time from: {ts_str}')
+	# 			continue
+	#
+	# 		fullpath = str(parent / dname)
+	#
+	# 		snapshots_map[subvol_name].append({
+	# 			'ts': ts_str,
+	# 			'dt': dt,
+	# 			'tag': tag_str,
+	# 			'subvol': subvol_name,
+	# 			'fullpath': fullpath,
+	# 		})
+	#
+	# 	# Sort each subvol’s snapshots in ascending date order
+	# 	for subvol_name, snaplist in snapshots_map.items():
+	# 		snaplist.sort(key=lambda s: s['dt'])
+	#
+	# 	return Res(snapshots_map)
 
-		def parse_ts(ts_str: str) -> datetime:
-			# Expects something like '2025-01-02_01-47-21'
-			# Adjust this strptime format if your snapshot naming scheme differs
-			return datetime.strptime(ts_str, "%Y-%m-%d_%H-%M-%S")
 
-		def list_dirs(parent: Path) -> List[str]:
-			return [d.name for d in parent.iterdir() if d.is_dir()]
-
-		snapshots_map = defaultdict(list)
-
-		# Ensure parent is a Path
-		parent = Path(parent)
-
-		# We’ll need a function that lists the subdirectories under `parent`.
-		# You can adapt this to your environment. For example:
-		#   s.list_dirs(parent) -> returns a list of subdirectory names in `parent`.
-		# For the example here, we assume `list_dirs` returns plain strings (dir names).
-		subdirs = list_dirs(parent)
-
-		for dname in subdirs:
-			# Typical pattern might be:
-			#   <subvol>_bfg_snapshots_<timestamp>_<tag>
-			#   <subvol>_<timestamp>_<tag>
-			# We'll attempt to capture all via two regex tries:
-			m = re.match(r'(.+)_bfg_snapshots_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
-			if m is None:
-				m = re.match(r'(.+)_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
-			if m is None:
-				_prerr(f'could not parse snapshot folder: {dname}')
-				continue
-
-			subvol_name = m.group(1)
-			ts_str = m.group(2)
-			tag_str = m.group(3)
-
-			try:
-				dt = parse_ts(ts_str)
-			except ValueError:
-				_prerr(f'could not parse date/time from: {ts_str}')
-				continue
-
-			fullpath = str(parent / dname)
-
-			snapshots_map[subvol_name].append({
-				'ts': ts_str,
-				'dt': dt,
-				'tag': tag_str,
-				'subvol': subvol_name,
-				'fullpath': fullpath,
-			})
-
-		# Sort each subvol’s snapshots in ascending date order
-		for subvol_name, snaplist in snapshots_map.items():
-			snaplist.sort(key=lambda s: s['dt'])
-
-		return Res(snapshots_map)
 
 	def prune(s, SUBVOLUME, CHECK_WITH_DB=True):
 		"""
@@ -583,22 +594,11 @@ class Bfg:
 		8) Delete everything else.
 		"""
 
-		SUBVOLUME = Path(SUBVOLUME).absolute()
-		# .val is from the Res(...) pattern in your code
-		snapshot_parent_dir = s.calculate_default_snapshot_parent_dir(MACHINE, SUBVOLUME).val
-		parent = Path(snapshot_parent_dir).parent  # The directory that actually contains the snapshots
-		logging.debug(f'pruning {parent}')
-
-		# We need the snapshots grouped by subvol
-		grouped = s.snapshots_by_subvol(parent).val
-
+		local_snapshots = s.get_local_bfg_snapshots_for_subvol(SUBVOLUME)
 		now = datetime.now()
 
-		# Helper to figure out which “bucket” a snapshot goes in
-		# based on its age (compared to the newest snapshot).
-		def bucket(dt: datetime, newest_dt: datetime) -> str:
-			age_seconds = (newest_dt - dt).total_seconds()
-			# Buckets: <1m, 1m–1h => per-minute, 1h–1d => per-hour, 1d–1mo => per-day, >1mo => per-month
+		def bucket(dt: datetime, now: datetime) -> str:
+			age_seconds = (now - dt).total_seconds()
 
 			if age_seconds < 60:
 				return "under-1-min"
@@ -669,6 +669,8 @@ class Bfg:
 
 		_prerr("Prune completed.")
 
+
+
 	def remote_commit(s, REMOTE_SUBVOLUME, TAG=None, SNAPSHOT=None, SNAPSHOT_NAME=None):
 		if TAG and SNAPSHOT:
 			_prerr(f'please specify SNAPSHOT or TAG, not both')
@@ -687,6 +689,8 @@ class Bfg:
 		s._remote_make_ro_snapshot(REMOTE_SUBVOLUME, SNAPSHOT)
 		_prerr(f'DONE {s._remote_str},\n\tsnapshotted {REMOTE_SUBVOLUME} \n\tinto {SNAPSHOT}\n.')
 		return Res(SNAPSHOT)
+
+
 
 	def push(s, SUBVOLUME, SNAPSHOT, REMOTE_SUBVOLUME, PARENT=None, CLONESRCS=[]):
 		"""
@@ -709,6 +713,8 @@ class Bfg:
 		_prerr(f'DONE, \n\tpushed {SNAPSHOT} \n\tinto {snapshot_parent}\n.')
 		return Res(str(snapshot_parent) + '/' + Path(SNAPSHOT).parts[-1])
 
+
+
 	def pull(s, REMOTE_SNAPSHOT, LOCAL_SUBVOLUME, PARENT=None, CLONESRCS=[]):
 		local_snapshot_parent_dir = s.calculate_default_snapshot_parent_dir('local', Path(LOCAL_SUBVOLUME)).val
 		s._local_cmd(['mkdir', '-p', str(local_snapshot_parent_dir)])
@@ -727,6 +733,7 @@ class Bfg:
 		return Res(local_snapshot)
 
 
+
 	"""
 
 	low-level operations
@@ -740,12 +747,16 @@ class Bfg:
 		_prerr(f'DONE {s._local_str}, \n\tsnapshotted {SUBVOLUME} \n\tinto {SNAPSHOT}\n.')
 		return SNAPSHOT
 
+
+
 	def _remote_make_ro_snapshot(s, SUBVOLUME, SNAPSHOT):
 		"""make a read-only snapshot of SUBVOLUME into SNAPSHOT, remotely"""
 		SNAPSHOT_PARENT = os.path.split((SNAPSHOT))[0]
 		s._remote_cmd(f'mkdir -p {SNAPSHOT_PARENT}')
 		s._remote_cmd(f'btrfs subvolume snapshot -r {SUBVOLUME} {SNAPSHOT}')
 		return SNAPSHOT
+
+
 
 	def _parent_args(s, PARENT, CLONESRCS):
 		parents_args = []
@@ -760,6 +771,8 @@ class Bfg:
 
 		return parents_args
 
+
+
 	def local_send(s, SNAPSHOT, target, PARENT, CLONESRCS=[]):
 		parents_args = s._parent_args(PARENT, CLONESRCS)
 
@@ -767,6 +780,8 @@ class Bfg:
 		cmd = shlex.join(s._sudo + ['btrfs', 'send'] + parents_args + [SNAPSHOT]) + target
 		_prerr((cmd) + ' #...')
 		subprocess.check_call(cmd, shell=True)
+
+
 
 	def remote_send(s, REMOTE_SNAPSHOT, LOCAL_DIR, PARENT, CLONESRCS):
 		parents_args = s._parent_args(PARENT, CLONESRCS)
@@ -786,6 +801,8 @@ class Bfg:
 			_prerr('exit code ' + str(p2.returncode))
 			exit(1)
 
+
+
 	def find_common_parent(s, subvolume, remote_subvolume, my_uuid, direction):
 		candidates = s.parent_candidates(subvolume, remote_subvolume, my_uuid, direction).val
 		# candidates.sort(key = lambda sv: sv['subvol_id']) # nope, subvol id is a crude approximation. What happens when you snapshot and old ro snapshot? It gets the highest id.
@@ -797,11 +814,15 @@ class Bfg:
 		else:
 			return Res(None)
 
+
+
 	def _add_abspath(s, subvol_record):
 		if subvol_record['machine'] == 'remote':
 			s._remote_add_abspath(subvol_record)
 		else:
 			s._local_add_abspath(subvol_record)
+
+
 
 	def _local_add_abspath(s, subvol_record):
 		if s._local_fs_id5_mount_point is None:
@@ -815,6 +836,8 @@ class Bfg:
 		subvol_record['abspath'] = s._local_fs_id5_mount_point + '/' + s._local_cmd(
 			['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), s._local_fs_id5_mount_point]).strip()
 
+
+
 	def _remote_add_abspath(s, subvol_record):
 		if s._remote_fs_id5_mount_point is None:
 			s._remote_fs_id5_mount_point = prompt(
@@ -827,12 +850,16 @@ class Bfg:
 		subvol_record['abspath'] = s._remote_fs_id5_mount_point + '/' + s._remote_cmd(
 			['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), s._remote_fs_id5_mount_point]).strip()
 
+
+
 	def parent_candidates(s, subvolume, remote_subvolume, my_uuid, direction):
 		candidates = []
 		for c in s._parent_candidates(subvolume, remote_subvolume, my_uuid, direction):
 			candidates.append(c)
 			_prerr('shared parent: ' + c['local_uuid'])
 		return Res(candidates)
+
+
 
 	def _parent_candidates(s, subvolume, remote_subvolume, my_uuid, direction):
 
@@ -870,8 +897,6 @@ class Bfg:
 
 
 
-
-
 	def _get_subvolumes(s, command_runner, subvolume):
 		"""
 		:param subvolume: filesystem path to a subvolume on the filesystem that we want to get a list of subvolumes of
@@ -895,11 +920,14 @@ class Bfg:
 		for i in subvols:
 			ro = i['local_uuid'] in ro_subvols
 			i['ro'] = ro
+			i['host'] = s.host
+			i['fs_uuid'] = s._local_fs_uuid
 		# _prerr(str(i))
 
 		subvols.sort(key=lambda sv: -sv['subvol_id'])
 		logbtrfs.debug(f'_get_subvolumes: {len(subvols)=}')
 		return subvols
+
 
 
 	def _make_snapshot_struct_from_sub_list_output_line(s, line):
@@ -921,11 +949,13 @@ class Bfg:
 		return snapshot
 
 
+
 def dash_is_none(string):
 	if string == '-':
 		return None
 	else:
 		return string
+
 
 
 def try_unlink(f):
@@ -935,6 +965,7 @@ def try_unlink(f):
 		pass
 
 
+
 def _prerr(*args, sep=' ', **kwargs):
 	message = sep.join(str(arg) for arg in args)
 	logging.info(message, **kwargs)
@@ -942,7 +973,7 @@ def _prerr(*args, sep=' ', **kwargs):
 
 
 def main():
-    fire.Fire(Bfg)
+	fire.Fire(Bfg)
 
 
 if __name__ == "__main__":
