@@ -2,12 +2,9 @@ import logging
 import json
 
 
-from bfg.bfg_logging import configure_logging_from_env
-configure_logging_from_env()
-
 
 class Res:
-	"""helper class for passing results of Fire-invoked functions around and make sure they're printed understandably and machine-readably"""
+	"""helper class for passing results of Fire-invoked functions around and making sure they're printed understandably and machine-readably"""
 	def __init__(s, value):
 		s.val = value
 	def __repr__(s):
@@ -16,6 +13,9 @@ class Res:
 		return json.dumps({'result':s.val})
 
 
+
+from bfg.bfg_logging import configure_logging_from_env
+configure_logging_from_env()
 
 
 
@@ -31,8 +31,6 @@ class VolWalker:
 		#for k,v in subvols_by_local_uuid.items():
 		#	logging.debug((k,v))
 		#logging.debug('/subvols_by_local_uuid')
-
-
 		s.by_uuid = subvols_by_local_uuid
 
 	def parent(s, uuid):
@@ -170,4 +168,5 @@ def is_most_recent_common_snapshot(path):
 
 	"""
 	pass
+
 

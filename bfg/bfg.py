@@ -17,7 +17,7 @@ from .utils import *
 from collections import defaultdict
 import re
 from datetime import datetime
-import bfg.db
+import bfg.db as db
 
 
 
@@ -72,6 +72,7 @@ class Bfg:
 			s._remote_str = '(on the other machine)'
 		s._local_str = '(here)'
 		s._sudo = ['sudo']
+		s.host = subprocess.check_output(['hostname'], text=True).strip()
 
 	def _yes(s, msg):
 		"""
@@ -179,7 +180,7 @@ class Bfg:
 			ts = sanitize_filename(tss.replace(' ', '_'))
 
 			if TAG is None:
-				TAG = 'from_' + subprocess.check_output(['hostname'], text=True).strip()
+				TAG = 'from_' + s.host
 			name = ts + '_' + TAG
 
 		res = Res(str(Path(str(parent) + '_' + name)))
@@ -270,11 +271,15 @@ class Bfg:
 		"""get info about a subvolume"""
 		return s.get_subvol(s._local_cmd, SUBVOLUME)
 
+
 	def get_local_snapshots(s, SUBVOLUME):
 		uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
 		snapshots = s._get_subvolumes(s._local_cmd, SUBVOLUME)
 		snapshots = [s for s in snapshots if s['parent_uuid'] == uuid and s['ro']]
+		for snapshot in snapshots:
+			snapshot['host'] = s.host
 		return Res(snapshots)
+
 
 	def get_local_bfg_snapshots(s, SUBVOLUME):
 		"""list snapshots in .bfg_snapshots"""
@@ -283,6 +288,7 @@ class Bfg:
 		logging.debug(f'{snapshots_dir=}')
 		return Res([s for s in r.val if s['path'].startswith(str(snapshots_dir))])
 
+
 	def update_db_with_local_bfg_snapshots(s, SUBVOLUME):
 		"""
 		update the global database with local snapshots:
@@ -290,11 +296,27 @@ class Bfg:
 			walk the table and mark missing snapshots as deleted in db
 		"""
 		snapshots = s.get_local_bfg_snapshots(SUBVOLUME).val
-
+		logging.debug(f'db.session()...')
 		session = db.session()
-
-
-
+		with session.begin():
+			for snapshot in snapshots:
+				logging.debug(f'{snapshot=}')
+				db_snapshot = session.query(db.Snapshot).get(snapshot['local_uuid'])
+				logging.debug(f'{db_snapshot=}')
+				if db_snapshot is None:
+					db_snapshot = db.Snapshot(
+						uuid=snapshot['local_uuid'],
+						parent_uuid=snapshot['parent_uuid'],
+						received_uuid=snapshot['received_uuid'],
+						host=snapshot['host'],
+						path=snapshot['path']
+					)
+					session.add(db_snapshot)
+				else:
+					db_snapshot.deleted = False
+			for db_snapshot in session.query(db.Snapshot).all():
+				if db_snapshot.uuid not in [s['local_uuid'] for s in snapshots]:
+					db_snapshot.deleted = True
 
 
 
