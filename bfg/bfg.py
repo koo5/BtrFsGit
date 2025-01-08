@@ -285,6 +285,7 @@ class Bfg:
 		"""list snapshots in .bfg_snapshots"""
 		r = s.get_local_snapshots(SUBVOLUME)
 		snapshots_dir = s.calculate_default_snapshot_parent_dir('local', SUBVOLUME).val
+		logging.debug(f'get_local_bfg_snapshots...');
 		logging.debug(f'get_local_bfg_snapshots: {snapshots_dir=}')
 		result = []
 		for snapshot in r.val:
@@ -292,7 +293,7 @@ class Bfg:
 			if snapshot['path'].startswith(str(snapshots_dir)):
 				logging.debug(f'get_local_bfg_snapshots: YES')
 				result.append(snapshot)
-			
+
 		return Res(result)
 
 
