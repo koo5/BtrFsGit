@@ -288,11 +288,20 @@ class Bfg:
 
 	def get_local_snapshots(s, SUBVOLUME):
 		logbtrfs.debug(f'get_local_snapshots...')
+		logger = logging.getLogger('get_local_snapshots')
 		uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
-		snapshots = s._get_subvolumes(s._local_cmd, SUBVOLUME)
-		snapshots = [s for s in snapshots if s['parent_uuid'] == uuid and s['ro']]
+		subvols = s._get_subvolumes(s._local_cmd, SUBVOLUME)
+
+		snapshots = []
+		for subvol in subvols:
+			logger.debug(f'{subvol=}')
+			if subvol['parent_uuid'] == uuid and subvol['ro']:
+				logger.debug(f'YES')
+				snapshots.append(subvol)
+
 		for snapshot in snapshots:
 			snapshot['host'] = s.host
+
 		logbtrfs.info(f'get_local_snapshots: {len(snapshots)=}')
 		return Res(snapshots)
 
@@ -814,10 +823,12 @@ class Bfg:
 		:return: list of records, one for each subvolume on the filesystem
 		"""
 		subvols = []
+		logger = logging.getLogger('_get_subvolumes')
 
 		cmd = ['btrfs', 'subvolume', 'list', '-q', '-t', '-R', '-u']
 		for line in command_runner(cmd + [subvolume], logger=logbtrfs).splitlines()[2:]:
 			subvol = s._make_snapshot_struct_from_sub_list_output_line(line)
+			logger.debug(subvol)
 			subvols.append(subvol)
 
 		ro_subvols = set()
