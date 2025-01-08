@@ -579,6 +579,46 @@ class Bfg:
 	# 	return Res(snapshots_map)
 
 
+	def bucket(s, dt: datetime, now: datetime) -> str:
+		age_seconds = (now - dt).total_seconds()
+
+		if age_seconds < 60:
+			return "under-1-min"
+
+		elif age_seconds < 3600:
+			# Bucket by minute
+			return dt.strftime("minute-%Y%m%d%H%M")
+
+		elif age_seconds < 86400:
+			# Bucket by hour
+			return dt.strftime("hour-%Y%m%d%H")
+
+		elif age_seconds < 2592000:
+			# ~30 days
+			return dt.strftime("day-%Y%m%d")
+
+		else:
+			return dt.strftime("month-%Y%m")  # year-month
+
+
+
+	def put_snapshots_into_buckets(s, snapshots):
+		"""
+		Group snapshots by bucket.
+		"""
+		grouped = defaultdict(list)
+		now = datetime.now()
+
+		for snap in snapshots:
+			dt = snap['dt']
+			b = s.bucket(dt, now)
+			grouped[b].append(snap)
+
+		for bucket, snaplist in grouped.items():
+			snaplist.sort(key=lambda s: s['dt'])
+
+		return grouped
+
 
 	def prune(s, SUBVOLUME, CHECK_WITH_DB=True):
 		"""
@@ -596,35 +636,13 @@ class Bfg:
 
 		local_snapshots = s.get_local_bfg_snapshots_for_subvol(SUBVOLUME)
 		now = datetime.now()
+		buckets = put_snapshots_into_buckets(local_snapshots)
 
-		def bucket(dt: datetime, now: datetime) -> str:
-			age_seconds = (now - dt).total_seconds()
-
-			if age_seconds < 60:
-				return "under-1-min"
-
-			elif age_seconds < 3600:
-				# Bucket by minute
-				return dt.strftime("minute-%Y%m%d%H%M")
-
-			elif age_seconds < 86400:
-				# Bucket by hour
-				return dt.strftime("hour-%Y%m%d%H")
-
-			elif age_seconds < 2592000:
-				# ~30 days
-				return dt.strftime("day-%Y%m%d")
-
-			else:
-				return dt.strftime("month-%Y%m")  # year-month
 
 		# Decide how to delete
-		for subvol_name, snaplist in grouped.items():
-			if not snaplist:
-				continue
+		for bucket, snaplist in buckets.items():
 
 			if len(snaplist) <= 2:
-				# If there’s 0, 1, or 2 snapshots, we do nothing
 				continue
 
 			# We sort ascending by dt, so oldest => snaplist[0], newest => snaplist[-1]
@@ -661,10 +679,7 @@ class Bfg:
 					cmd = ['btrfs', 'subvolume', 'delete', path]
 					if not s._yes(shlex.join(cmd)):
 						exit(1)
-					if MACHINE == 'remote':
-						s._remote_cmd(cmd)
-					else:
-						s._local_cmd(cmd)
+					s._local_cmd(cmd)
 					_prerr(f"Deleted snapshot: {path}")
 
 		_prerr("Prune completed.")
