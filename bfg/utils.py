@@ -14,11 +14,6 @@ class Res:
 
 
 
-from bfg.bfg_logging import configure_logging_from_env
-configure_logging_from_env()
-
-
-
 class VolWalker:
 	""" walks subvolume records to find common parents
 	"""

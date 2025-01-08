@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 
 """
-The Big Friendly F.....g Gun!
+BtrFsGit
 """
+import logging
 
-from bfg.bfg_logging import configure_logging_from_env
+from bfg.bfg_logging import configure_logging
+configure_logging()
+
 from pathlib import Path
 from pathvalidate import sanitize_filename
 import sys, os
@@ -20,8 +23,6 @@ from datetime import datetime
 import bfg.db as db
 
 
-
-logging.basicConfig(level=logging.INFO)
 
 
 def prompt(question):
@@ -88,8 +89,10 @@ class Bfg:
 
 	"""
 
-	def _remote_cmd(s, cmd, die_on_error=True):
+	def _remote_cmd(s, cmd, die_on_error=True, logger=None):
 		"""potentially remote command"""
+		if logger is None:
+			logger = logging.getLogger('btrfs')
 		if not isinstance(cmd, list):
 			cmd = shlex.split(cmd)
 		else:
@@ -97,16 +100,18 @@ class Bfg:
 		if s._sshstr != '':
 			ssh = shlex.split(s._sshstr)
 			cmd2 = ssh + s._sudo + cmd
-			_prerr(shlex.join(cmd2))
+			logger.debug(shlex.join(cmd2))
 			return s._cmd(cmd2, die_on_error)
 		else:
 			return s._local_cmd(cmd, die_on_error)
 
-	def _local_cmd(s, c, die_on_error=True):
+	def _local_cmd(s, c, die_on_error=True, logger=None):
+		if logger is None:
+			logger = logging.getLogger('btrfs')
 		if not isinstance(c, list):
 			c = shlex.split(c)
 		c = s._sudo + [str(x) for x in c]
-		_prerr(shlex.join(c))
+		logger.debug(shlex.join(c))
 		return s._cmd(c, die_on_error)
 
 	def _cmd(s, c, die_on_error):
@@ -134,7 +139,7 @@ class Bfg:
 		SUBVOLUME = Path(SUBVOLUME)
 		parent = SUBVOLUME.parent
 
-		_prerr(f'calculate_default_snapshot_parent_dir for {SUBVOLUME=}')
+		logging.getLogger('utils').info(f'calculate_default_snapshot_parent_dir for {SUBVOLUME=}')
 
 		# is parent the same filesystem as SUBVOLUME? if not, then SUBVOLUME is the top level subvolume, and we need to make the snapshot inside it, rather than outside.
 
@@ -162,8 +167,10 @@ class Bfg:
 					f'cp --reflink failed, this means that {parent} is not the same filesystem, going to make snapshot inside {SUBVOLUME} instead of {parent}')
 				snapshot_parent_dir = SUBVOLUME
 
-		return Res(str(Path(
-			str(snapshot_parent_dir) + '/.bfg_snapshots/' + Path(SUBVOLUME).parts[-1]).absolute()))
+		r = str(Path(
+			str(snapshot_parent_dir) + '/.bfg_snapshots/' + Path(SUBVOLUME).parts[-1]).absolute())
+		logging.getLogger('utils').info(f'calculate_default_snapshot_parent_dir: {r=}')
+		return Res(r)
 
 	def calculate_default_snapshot_path(s, machine, SUBVOLUME, TAG, NAME_OVERRIDE=None):  # , TAG2):
 		"""
@@ -285,17 +292,18 @@ class Bfg:
 
 	def get_local_bfg_snapshots(s, SUBVOLUME):
 		"""list snapshots in .bfg_snapshots"""
-		r = s.get_local_snapshots(SUBVOLUME)
+		local_snapshots = s.get_local_snapshots(SUBVOLUME).val
 		snapshots_dir = s.calculate_default_snapshot_parent_dir('local', SUBVOLUME).val
 		logging.debug(f'get_local_bfg_snapshots...');
 		logging.debug(f'get_local_bfg_snapshots: {snapshots_dir=}')
 		result = []
-		for snapshot in r.val:
+		logging.info(f'get_local_bfg_snapshots: {len(local_snapshots)=}')
+		for snapshot in local_snapshots:
 			logging.debug(f'get_local_bfg_snapshots: {snapshots_dir=} vs {snapshot=}')
 			if snapshot['path'].startswith(str(snapshots_dir)):
 				logging.debug(f'get_local_bfg_snapshots: YES')
 				result.append(snapshot)
-
+		logging.info(f'get_local_bfg_snapshots: {len(result)=}')
 		return Res(result)
 
 
@@ -858,10 +866,10 @@ def _prerr(*args, sep=' ', **kwargs):
 	logging.info(message, **kwargs)
 
 
+
 def main():
-	fire.Fire(Bfg)
+    fire.Fire(Bfg)
 
 
 if __name__ == "__main__":
-	configure_logging_from_env()
 	main()  # pragma: no cover

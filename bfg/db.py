@@ -1,3 +1,4 @@
+import logging
 from typing import List
 from typing import Optional
 from sqlalchemy import ForeignKey
@@ -12,6 +13,8 @@ from sqlalchemy.orm import Session
 
 class Base(DeclarativeBase):
 	pass
+
+
 class Snapshot(Base):
 	__tablename__ = "snapshots"
 	uuid: Mapped[str] = mapped_column(primary_key=True)
@@ -19,6 +22,8 @@ class Snapshot(Base):
 	received_uuid: Mapped[Optional[str]] = mapped_column()
 	host: Mapped[Optional[str]] = mapped_column()
 	path: Mapped[str] = mapped_column()
+
+
 
 
 def get_engine():
@@ -32,7 +37,8 @@ def get_engine():
 	#return psycopg2.connect(f"dbname={db} user={user} host={host} password={password}")
 
 	conn_str = f"postgresql+psycopg2://{user}:{password}@{host}/{db}"
-	engine = create_engine(conn_str, echo=True)
+	l = logging.getLogger('sqlalchemy').getEffectiveLevel()
+	engine = create_engine(conn_str, echo=(l < 20))
 	Base.metadata.create_all(engine)
 	return engine
 
