@@ -299,19 +299,37 @@ class Bfg:
 
 
 
-	def get_local_bfg_snapshots_for_subvol(s, SUBVOLUME):
+	def get_local_bfg_snapshots(s, SUBVOLUME):
 		"""list snapshots in .bfg_snapshots"""
+		logger = logging.getLogger('get_local_bfg_snapshots')
 		local_snapshots = s.get_local_snapshots(SUBVOLUME).val
-		logbfg.debug(f'get_local_bfg_snapshots_for_subvol: {snapshots_dir=}')
-		logger = logging.getLogger('get_local_bfg_snapshots_for_subvol')
 		result = []
 		for snapshot in local_snapshots:
 			logger.debug(f'{snapshot=}')
-			if '.bfg_snapshots' in Path(subvol['path']).parts:
+			if '.bfg_snapshots' in Path(snapshot['path']).parts:
 				logger.debug(f'YES')
 				result.append(snapshot)
+				snapshot['dt'] = s.snapshot_dt(snapshot)
 		logbfg.info(f'get_local_bfg_snapshots_for_subvol: {len(result)=}')
 		return Res(result)
+
+
+
+	def snapshot_dt(s, snapshot):
+
+		dname = snapshot['path'].split('/')[-1]
+		# Typical pattern might be:
+		#   <subvol>_bfg_snapshots_<timestamp>_<tag>
+		#   <subvol>_<timestamp>_<tag>
+		# We'll attempt to capture all via two regex tries:
+
+		m = re.match(r'(.+)_bfg_snapshots_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
+		if m is None:
+			m = re.match(r'(.+)_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
+		if m is None:
+			raise Exception(f'could not parse snapshot folder: {dname}')
+		return datetime.strptime(m.group(2), "%Y-%m-%d_%H-%M-%S")
+
 
 
 
@@ -541,16 +559,6 @@ class Bfg:
 	# 	subdirs = list_dirs(parent)
 	#
 	# 	for dname in subdirs:
-	# 		# Typical pattern might be:
-	# 		#   <subvol>_bfg_snapshots_<timestamp>_<tag>
-	# 		#   <subvol>_<timestamp>_<tag>
-	# 		# We'll attempt to capture all via two regex tries:
-	# 		m = re.match(r'(.+)_bfg_snapshots_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
-	# 		if m is None:
-	# 			m = re.match(r'(.+)_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
-	# 		if m is None:
-	# 			_prerr(f'could not parse snapshot folder: {dname}')
-	# 			continue
 	#
 	# 		subvol_name = m.group(1)
 	# 		ts_str = m.group(2)
@@ -634,23 +642,27 @@ class Bfg:
 		8) Delete everything else.
 		"""
 
-		local_snapshots = s.get_local_bfg_snapshots_for_subvol(SUBVOLUME)
+		local_snapshots = s.get_local_bfg_snapshots(SUBVOLUME).val
 		now = datetime.now()
-		buckets = put_snapshots_into_buckets(local_snapshots)
+		buckets = s.put_snapshots_into_buckets(local_snapshots)
 
 
-		# Decide how to delete
 		for bucket, snaplist in buckets.items():
+
+			logbfg.info(f"Bucket: {bucket}")
+			for snap in snaplist:
+				logbfg.info(f"  {snap['path']}")
+
 
 			if len(snaplist) <= 2:
 				continue
 
-			# We sort ascending by dt, so oldest => snaplist[0], newest => snaplist[-1]
+			# We sort ascending by id, so oldest => snaplist[0], newest => snaplist[-1]
 			oldest = snaplist[0]
 			newest = snaplist[-1]
 
 			# We keep oldest and newest for sure
-			keep_set = {oldest['fullpath'], newest['fullpath']}
+			keep_set = {oldest['path'], newest['path']}
 
 			newest_dt = newest['dt']
 
@@ -658,22 +670,10 @@ class Bfg:
 			# the *newest* snapshot in each time bucket.
 			# skip the very newest since we already keep it
 			# skip the very oldest until we handle it at the end
-			used_buckets = set()
-			# We already handle newest, so skip last element in iteration
 			middle_snaps = snaplist[1:-1]  # everything except oldest & newest
 
-			for snap in reversed(middle_snaps):
-				dt = snap['dt']
-				b = bucket(dt, newest_dt)
-
-				if b not in used_buckets:
-					used_buckets.add(b)
-					keep_set.add(snap['fullpath'])
-
-			# Now we know which fullpaths we want to keep
-			# We'll remove the rest
-			for snap in snaplist:
-				path = snap['fullpath']
+			for snap in middle_snaps:
+				path = snap['path']
 				if path not in keep_set and not is_most_recent_common_snapshot(path):
 					# Prompt user or ask for confirmation if you want:
 					cmd = ['btrfs', 'subvolume', 'delete', path]
