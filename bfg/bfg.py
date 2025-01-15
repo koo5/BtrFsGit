@@ -634,21 +634,25 @@ class Bfg:
 		Find the most recent common snapshots between the local and each remote filesystem.
 
 		"""
-		remote_fss = s.get_remote_fs_uids_for_subvolume_path(SUBVOLUME)
 
+		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
 
-
-	def get_remote_fs_uids_for_subvolume_path(s, SUBVOLUME):
 		all = s.all_snapshots_from_db()
+
+		fss = s.get_remote_fs_uids_for_subvolume_path(all, SUBVOLUME)
+		fss.remove(s._local_fs_uuid)
+
+		for fs in fss:
+			s._parent_candidates2(s, all, s._subvol_uuid , direction):
+
+
+	def get_remote_fs_uids_for_subvolume_path(s, all, SUBVOLUME):
 
 		fss = set()
 		for snap in all:
 			fss.add(snap.fs_uuid)
 
-		logbfg.info(f'get_remote_fs_uids_for_subvolume_path: {fss=}')
-
-
-
+		return fss
 
 
 	def remote_commit(s, REMOTE_SUBVOLUME, TAG=None, SNAPSHOT=None, SNAPSHOT_NAME=None):
@@ -859,6 +863,12 @@ class Bfg:
 			for v in lst:
 				v['machine'] = machine
 				all_subvols.append(v)
+
+		yield from s._parent_candidates2(all_subvols, my_uuid, direction)
+
+
+
+	def _parent_candidates2(s, all_subvols, my_uuid, direction):
 
 		all_subvols2 = {}
 		for i in all_subvols:
