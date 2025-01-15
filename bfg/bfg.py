@@ -425,6 +425,15 @@ class Bfg:
 			logbfg.info(f'commit...')
 
 
+	def all_snapshots_from_db(self):
+		"""
+		"""
+		session = db.session()
+		with session.begin():
+			all = session.query(db.Snapshot).all()
+		return all
+
+
 
 	def get_local_subvolumes(s, SUBVOLUME):
 		"""list subvolumes on the local machine"""
@@ -520,72 +529,6 @@ class Bfg:
 
 
 
-	# def snapshots_by_subvol(s, parent: Path):
-	# 	"""
-	# 	Return a dictionary of the form:
-	# 		{
-	# 			subvol_name: [
-	# 				{
-	# 					'ts': '2025-01-02_01-47-21',
-	# 					'dt': datetime(...),
-	# 					'tag': '...',
-	# 					'subvol': 'subvol_name',
-	# 					'fullpath': '/full/path/to/the/snapshot'
-	# 				},
-	# 				...
-	# 			],
-	# 			...
-	# 		}
-	# 	One list per subvolume name. The list is sorted ascending by 'dt'.
-	# 	"""
-	#
-	# 	def parse_ts(ts_str: str) -> datetime:
-	# 		# Expects something like '2025-01-02_01-47-21'
-	# 		# Adjust this strptime format if your snapshot naming scheme differs
-	# 		return datetime.strptime(ts_str, "%Y-%m-%d_%H-%M-%S")
-	#
-	# 	def list_dirs(parent: Path) -> List[str]:
-	# 		return [d.name for d in parent.iterdir() if d.is_dir()]
-	#
-	# 	snapshots_map = defaultdict(list)
-	#
-	# 	# Ensure parent is a Path
-	# 	parent = Path(parent)
-	#
-	# 	# We’ll need a function that lists the subdirectories under `parent`.
-	# 	# You can adapt this to your environment. For example:
-	# 	#   s.list_dirs(parent) -> returns a list of subdirectory names in `parent`.
-	# 	# For the example here, we assume `list_dirs` returns plain strings (dir names).
-	# 	subdirs = list_dirs(parent)
-	#
-	# 	for dname in subdirs:
-	#
-	# 		subvol_name = m.group(1)
-	# 		ts_str = m.group(2)
-	# 		tag_str = m.group(3)
-	#
-	# 		try:
-	# 			dt = parse_ts(ts_str)
-	# 		except ValueError:
-	# 			_prerr(f'could not parse date/time from: {ts_str}')
-	# 			continue
-	#
-	# 		fullpath = str(parent / dname)
-	#
-	# 		snapshots_map[subvol_name].append({
-	# 			'ts': ts_str,
-	# 			'dt': dt,
-	# 			'tag': tag_str,
-	# 			'subvol': subvol_name,
-	# 			'fullpath': fullpath,
-	# 		})
-	#
-	# 	# Sort each subvol’s snapshots in ascending date order
-	# 	for subvol_name, snaplist in snapshots_map.items():
-	# 		snaplist.sort(key=lambda s: s['dt'])
-	#
-	# 	return Res(snapshots_map)
-
 
 	def bucket(s, dt: datetime, now: datetime) -> str:
 		age_seconds = (now - dt).total_seconds()
@@ -645,6 +588,7 @@ class Bfg:
 		local_snapshots = s.get_local_bfg_snapshots(SUBVOLUME).val
 		now = datetime.now()
 		buckets = s.put_snapshots_into_buckets(local_snapshots)
+		mrcs = s.most_recent_common_snapshots(SUBVOLUME)
 
 
 		for bucket, snaplist in buckets.items():
@@ -662,7 +606,7 @@ class Bfg:
 			newest = snaplist[-1]
 
 			# We keep oldest and newest for sure
-			keep_set = {oldest['path'], newest['path']}
+			keep_set = mrcs + {Path(oldest['path']), Path(newest['path'])}
 
 			newest_dt = newest['dt']
 
@@ -673,8 +617,8 @@ class Bfg:
 			middle_snaps = snaplist[1:-1]  # everything except oldest & newest
 
 			for snap in middle_snaps:
-				path = snap['path']
-				if path not in keep_set and not is_most_recent_common_snapshot(path):
+				path = Path(snap['path'])
+				if path not in keep_set:
 					# Prompt user or ask for confirmation if you want:
 					cmd = ['btrfs', 'subvolume', 'delete', path]
 					if not s._yes(shlex.join(cmd)):
@@ -683,6 +627,27 @@ class Bfg:
 					_prerr(f"Deleted snapshot: {path}")
 
 		_prerr("Prune completed.")
+
+
+	def most_recent_common_snapshots(s, SUBVOLUME):
+		"""
+		Find the most recent common snapshots between the local and each remote filesystem.
+
+		"""
+		remote_fss = s.get_remote_fs_uids_for_subvolume_path(SUBVOLUME)
+
+
+
+	def get_remote_fs_uids_for_subvolume_path(s, SUBVOLUME):
+		all = s.all_snapshots_from_db()
+
+		fss = set()
+		for snap in all:
+			fss.add(snap.fs_uuid)
+
+		logbfg.info(f'get_remote_fs_uids_for_subvolume_path: {fss=}')
+
+
 
 
 
