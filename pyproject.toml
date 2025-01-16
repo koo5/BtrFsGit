@@ -1,9 +1,9 @@
 [tool]
 [tool.poetry]
-name = "BtrFsGit"
-version = "9000.0.1"
-homepage = "https://github.com/koo5/bfg"
-description = "B-tree Filesystem Git attempts to enable git-like workflow for BTRFS subvolumes. Commit, push, checkout, stash, pull..."
+name = "btrfsgit"
+version = "9000.0.2"
+homepage = "https://github.com/koo5/btrfsgit"
+description = "git-like workflow for BTRFS subvolumes. Commit, push, checkout, stash, pull..."
 authors = ["koo5 <kolman.jindrich@gmail.com>"]
 readme = "README.md"
 license =  "GNU Affero General Public License v3 or later (AGPLv3+)"
@@ -17,7 +17,7 @@ classifiers=[
     'Programming Language :: Python :: 3.9',
 ]
 packages = [
-    { include = "bfg" },
+    { include = "btrfsgit" },
     { include = "tests", format = "sdist" },
 ]
 
@@ -53,7 +53,7 @@ test = [
 dev = ["tox", "pre-commit", "virtualenv", "pip", "twine", "toml"]
 
 [tool.poetry.scripts]
-bfg = 'bfg.bfg:main'
+bfg = 'btrfsgit.btrfsgit:main'
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
