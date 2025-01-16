@@ -680,16 +680,17 @@ class Bfg:
 		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
 		fss = s.remote_fs_uuids(all)
 
-		for fs in fss:
+		for fs_uuid, fs in fss.items():
+			hosts = fs['hosts']
 
-			logbfg.debug(f"most_recent_common_snapshots for {fs=}....")
+			logbfg.debug(f"most_recent_common_snapshots for {fs_uuid=} (hosts:{hosts})....")
 
 			all2 = []
 			for snap in all:
 				x = dict(snap)
 				if x['fs_uuid'] == s._local_fs_uuid:
 					x['machine'] = 'local'
-				elif x['fs_uuid'] == fs:
+				elif x['fs_uuid'] == fs_uuid:
 					x['machine'] = 'remote'
 				else:
 					x['machine'] = 'other'
@@ -708,10 +709,13 @@ class Bfg:
 
 
 	def remote_fs_uuids(s, all):
-		fss = set()
+		fss = {}
 		for snap in all:
-			fss.add(snap['fs_uuid'])
-		fss = fss - set([s._local_fs_uuid])
+			snap_fs_uuid = snap['fs_uuid']
+			if snap_fs_uuid not in fss:
+				fss[snap_fs_uuid] = {'hosts': set()}
+			fss[snap_fs_uuid]['hosts'].add(snap['host'])
+		del fss[s._local_fs_uuid]
 		return fss
 
 
