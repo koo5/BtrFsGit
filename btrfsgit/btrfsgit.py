@@ -5,6 +5,8 @@ BtrFsGit
 """
 import logging
 
+from sqlalchemy.orm import undefer
+
 from btrfsgit.bfg_logging import configure_logging
 configure_logging()
 
@@ -27,6 +29,13 @@ import re
 from datetime import datetime
 import btrfsgit.db as db
 
+
+
+
+def datetime_to_json(o):
+    if isinstance(o, datetime):
+        return o.isoformat()
+    raise TypeError(f"Type {type(o)} not serializable")
 
 
 
@@ -434,8 +443,16 @@ class Bfg:
 		logbfg.info(f'all_snapshots_from_db...')
 		session = db.session()
 		with session.begin():
-			all = session.query(db.Snapshot).all()
-		return all
+			all = session.query(db.Snapshot).options(undefer("*")).all()
+
+			r = [{
+				column.name: getattr(x, column.name)
+				for column in x.__table__.columns} for x in all]
+
+			for x in r:
+				x['dt'] = self.snapshot_dt(x)
+
+			return r
 
 
 
@@ -590,10 +607,13 @@ class Bfg:
 		"""
 
 		logbfg.info(f"Pruning snapshots for {SUBVOLUME=}")
-		local_snapshots = s.get_local_bfg_snapshots(SUBVOLUME).val
+		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
+
+		all = s.all_snapshots_from_db()
+		local_snapshots = s.local_bfg_snapshots(all, SUBVOLUME)
 		now = datetime.now()
 		buckets = s.put_snapshots_into_buckets(local_snapshots)
-		mrcs = s.most_recent_common_snapshots(SUBVOLUME)
+		mrcs = set([x['path'] for x in s.most_recent_common_snapshots(all, SUBVOLUME)])
 
 
 		for bucket, snaplist in buckets.items():
@@ -611,7 +631,7 @@ class Bfg:
 			newest = snaplist[-1]
 
 			# We keep oldest and newest for sure
-			keep_set = mrcs + {Path(oldest['path']), Path(newest['path'])}
+			keep_set = mrcs.union({Path(oldest['path']), Path(newest['path'])})
 
 			newest_dt = newest['dt']
 
@@ -624,8 +644,10 @@ class Bfg:
 			for snap in middle_snaps:
 				path = Path(snap['path'])
 				if path not in keep_set:
-					# Prompt user or ask for confirmation if you want:
-					cmd = ['btrfs', 'subvolume', 'delete', path]
+
+					logbfg.info(f"prunable: {path}")
+
+					cmd = ['btrfs', 'subvolume', 'delete', str(path)]
 					if not s._yes(shlex.join(cmd)):
 						exit(1)
 					s._local_cmd(cmd)
@@ -634,35 +656,62 @@ class Bfg:
 		_prerr("Prune completed.")
 
 
-	def most_recent_common_snapshots(s, SUBVOLUME):
+
+	def local_bfg_snapshots(s, all, SUBVOLUME):
+		result = []
+
+		for snap in all:
+			if snap['parent_uuid'] == s._subvol_uuid and not snap['deleted'] and '.bfg_snapshots' in Path(snap['path']).parts:
+				result.append(snap)
+
+		return result
+
+
+
+
+	def most_recent_common_snapshots(s, all, SUBVOLUME):
 		"""
 		Find the most recent common snapshots between the local and each remote filesystem.
 
 		"""
 
+		result = []
+
 		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
-
-		all = s.all_snapshots_from_db()
-
 		fss = s.remote_fs_uuids(all)
-		fss.remove(s._local_fs_uuid)
 
 		for fs in fss:
 
-			logbfg.info(f"Most recent common snapshots for {fs=}")
+			logbfg.debug(f"most_recent_common_snapshots for {fs=}....")
 
-			candidates = s._parent_candidates2(s, all, s._subvol_uuid , ('local', 'remote'))
+			all2 = []
+			for snap in all:
+				x = dict(snap)
+				if x['fs_uuid'] == s._local_fs_uuid:
+					x['machine'] = 'local'
+				elif x['fs_uuid'] == fs:
+					x['machine'] = 'remote'
+				else:
+					x['machine'] = 'other'
+				all2.append(x)
+
+			candidates = list(s._parent_candidates2(all2, s._subvol_uuid , ('local', 'remote')))
 
 			for candidate in candidates:
-				logbfg.info(f"  {candidate['local_uuid']}")
+				logbfg.debug(f"  {candidate['local_uuid']}")
+
+			if len(candidates) > 0:
+				result.append(Path(candidates[0]))
+
+		return result
 
 
 
 	def remote_fs_uuids(s, all):
 		fss = set()
 		for snap in all:
-			fss.add(snap.fs_uuid)
-		fss.remove(s._local_fs_uuid)
+			fss.add(snap['fs_uuid'])
+		fss = fss - set([s._local_fs_uuid])
 		return fss
 
 
@@ -897,7 +946,7 @@ class Bfg:
 			all_subvols2[i['local_uuid']] = i
 
 		logging.debug('all_subvols2:')
-		logging.debug(json.dumps(all_subvols2, indent=2))
+		logging.debug(json.dumps(all_subvols2, indent=2, default=datetime_to_json))
 
 		yield from VolWalker(all_subvols2, direction).walk(my_uuid)
 
