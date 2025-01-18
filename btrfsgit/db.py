@@ -39,7 +39,6 @@ def get_engine():
 	if _engine:
 		return _engine
 
-
 	host = 'hours.internal'
 	db = 'bfg'
 	table = 'snapshots'
@@ -53,6 +52,7 @@ def get_engine():
 	l = logging.getLogger('sqlalchemy').getEffectiveLevel()
 	_engine = create_engine(conn_str, echo=(l < 20))
 	Base.metadata.create_all(_engine)
+	logging.getLogger().info(f"Connected.")
 	return _engine
 
 

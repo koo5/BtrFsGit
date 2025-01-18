@@ -67,6 +67,7 @@ def prompt(question, dry_run=False):
 				sys.stdout.write('\n')
 				return False
 			choice = input().lower()
+			sys.stdout.write('\n')
 			if default is not None and choice == "":
 				return valid[default]
 			elif choice in valid:
@@ -405,6 +406,7 @@ class Bfg:
 		logbfg.info(f'db.session()...')
 		session = db.session()
 		with session.begin():
+			logbfg.info(f'got db session...')
 
 			logbfg.info(f'purge db of all snapshots with fs_uuid={s._local_fs_uuid}...')
 			session.query(db.Snapshot).filter(db.Snapshot.fs_uuid == s._local_fs_uuid).delete()
@@ -436,14 +438,18 @@ class Bfg:
 		logbfg.info(f'all_snapshots_from_db...')
 		session = db.session()
 		with session.begin():
-			all = session.query(db.Snapshot).options(undefer("*")).all()
+			logbfg.info(f'got db session.')
+			logbfg.info(f'query all snapshots from db...')
+			all = list(session.query(db.Snapshot).options(undefer("*")).all())
+			logbfg.info(f'got {len(all)} snapshots from db.')
 
 			r = [{
 				column.name: getattr(x, column.name)
 				for column in x.__table__.columns} for x in all]
 
 			for x in r:
-				x['dt'] = self.snapshot_dt(x)
+				if '.bfg_snapshots' in Path(x['path']).parts:
+					x['dt'] = self.snapshot_dt(x)
 				x['src'] = 'db'
 
 			return r
@@ -616,17 +622,15 @@ class Bfg:
 		if len(local_snapshots) == 0:
 			logbfg.info(f"No snapshots found for {SUBVOLUME}")
 			return
-		newest = Path(local_snapshots[0]['path'])
+		newest = Path(local_snapshots[-1]['path'])
 		buckets = s.put_snapshots_into_buckets(local_snapshots)
 		mrcs = set([Path(x['path']) for x in s.most_recent_common_snapshots(all, SUBVOLUME)])
 		logbfg.info(f"{mrcs=}")
 
 		for bucket, snaplist in buckets.items():
-
 			logbfg.info(f"Bucket: {bucket}")
 
 			for i,snap in enumerate(snaplist):
-
 				path = Path(snap['path'])
 
 				is_newest = path == newest
@@ -635,10 +639,18 @@ class Bfg:
 				#logbfg.info(f"{path} {is_newest=} {is_mrc=} {is_last=}, {i=}/{len(snaplist)}")
 				is_prunable = not is_newest and not is_mrc and not is_last
 
-				logbfg.info(f"  {snap['path']}" + (" (mrcs)" if is_mrc else "") + (" (newest)" if is_newest else (" (last)" if is_last else "") + (" (prune?)" if is_prunable else "")))
+				flags = ''
+				if is_mrc:
+					flags += ' (mrc)'
+				if is_newest:
+					flags += ' (newest)'
+				if is_last:
+					flags += ' (last)'
+				if is_prunable:
+					flags += ' (prunable)'
+				logbfg.info(f"  {path}{flags}")
 
 				if is_prunable and not DRY_RUN:
-
 					cmd = ['btrfs', 'subvolume', 'delete', str(path)]
 					if not s._yes(shlex.join(cmd)):
 						continue
@@ -692,13 +704,13 @@ class Bfg:
 			logbfg.info(f"_parent_candidates2...")
 			candidates = list(s._parent_candidates2(all2, s._subvol_uuid , ('local', 'remote')))
 
-			logbfg.info(f"candidates: {len(candidates)}")
+			logbfg.info(f"shared parents: {len(candidates)}")
 
 			for candidate in candidates:
 				logbfg.info(f"  {candidate['local_uuid']}")
 
 			if len(candidates) > 0:
-				result.append(Path(candidates[0]))
+				result.append(candidates[0])
 
 		return result
 
@@ -741,10 +753,13 @@ class Bfg:
 		Try to figure out shared parents, if not provided, and send SNAPSHOT to the other side.
 		"""
 		snapshot_parent_dir = s.calculate_default_snapshot_parent_dir('remote', Path(REMOTE_SUBVOLUME)).val
+		logbfg.info(f'mkdir -p {snapshot_parent_dir}')
 		s._remote_cmd(['mkdir', '-p', str(snapshot_parent_dir)])
 
 		if PARENT is None:
+			logbfg.info(f'get_subvol...')
 			my_uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
+			logbfg.info(f'find_common_parent...')
 			PARENT = s.find_common_parent(SUBVOLUME, str(snapshot_parent_dir), my_uuid, ('local', 'remote')).val
 			if PARENT is not None:
 				PARENT = PARENT['abspath']
@@ -845,6 +860,7 @@ class Bfg:
 
 
 	def find_common_parent(s, subvolume, remote_subvolume, my_uuid, direction):
+		logbfg.info(f'parent_candidates...')
 		candidates = s.parent_candidates(subvolume, remote_subvolume, my_uuid, direction).val
 		# candidates.sort(key = lambda sv: sv['subvol_id']) # nope, subvol id is a crude approximation. What happens when you snapshot and old ro snapshot? It gets the highest id.
 		if len(candidates) != 0:
@@ -903,8 +919,9 @@ class Bfg:
 
 
 	def _parent_candidates(s, subvolume, remote_subvolume, my_uuid, direction):
-
+		logbfg.info(f'_get_subvolumes remote...')
 		remote_subvols = s._get_subvolumes(s._remote_cmd, remote_subvolume, 'remote')
+		logbfg.info(f'_get_subvolumes local...')
 		local_subvols = s._get_subvolumes(s._local_cmd, subvolume, 'local')
 
 		#other_subvols = load_subvol_dumps()
@@ -942,11 +959,11 @@ class Bfg:
 					logging.warning(json.dumps(all_subvols2[i['local_uuid']], indent=2, default=datetime_to_json, sort_keys=True))
 					raise 'wut'
 
-			if not '.bfg_snapshots' in Path(i['path']).parts:
-				continue
+			# if not Path('.bfg_snapshots') in Path(i['path']).parts:
+			# 	continue
 
 			all_subvols2[i['local_uuid']] = i
-			logging.info('_parent_candidates2:' + json.dumps(i, indent=2, default=datetime_to_json, sort_keys=True))
+			logging.debug('_parent_candidates2:' + json.dumps(i, indent=2, default=datetime_to_json, sort_keys=True))
 
 		logging.info(f'_parent_candidates2 all_subvols: {len(all_subvols)}')
 		yield from VolWalker(all_subvols2, direction).walk(my_uuid)
