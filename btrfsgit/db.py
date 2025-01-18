@@ -25,6 +25,8 @@ class Snapshot(Base):
 	fs: Mapped[str] = mapped_column(nullable=False)
 	path: Mapped[str] = mapped_column(nullable=False)
 	deleted: Mapped[bool] = mapped_column(default=False, nullable=False)
+	subvol_id: Mapped[Optional[int]] = mapped_column(nullable=False)
+	ro: Mapped[bool] = mapped_column(nullable=False)
 
 
 

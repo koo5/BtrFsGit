@@ -430,7 +430,9 @@ class Bfg:
 						host=snapshot['host'],
 						fs=s._local_fs_id5_mount_point,
 						path=snapshot['path'],
-						fs_uuid=snapshot['fs_uuid']
+						fs_uuid=snapshot['fs_uuid'],
+						subvol_id=snapshot['subvol_id'],
+						ro=snapshot['ro'],
 					)
 					session.add(db_snapshot)
 			logbfg.info(f'mark missing snapshots as deleted in db...')
@@ -460,6 +462,7 @@ class Bfg:
 
 			for x in r:
 				x['dt'] = self.snapshot_dt(x)
+				x['src'] = 'db'
 
 			return r
 
@@ -701,7 +704,7 @@ class Bfg:
 				else:
 					x['machine'] = 'other'
 				all2.append(x)
-				#logbfg.info(f"  {x=}")
+				#logbfg.info(f"all2: {x=}")
 
 			logbfg.info(f"all2: {len(all2)}")
 			logbfg.info(f"_parent_candidates2...")
@@ -952,11 +955,11 @@ class Bfg:
 			if i['local_uuid'] in all_subvols2:
 				if i != all_subvols2[i['local_uuid']]:
 					logging.warning('duplicate subvols:')
-					logging.warning(json.dumps(i, indent=2, default=datetime_to_json))
-					logging.warning(json.dumps(all_subvols2[i['local_uuid']], indent=2, default=datetime_to_json))
+					logging.warning(json.dumps(i, indent=2, default=datetime_to_json, sort_keys=True))
+					logging.warning(json.dumps(all_subvols2[i['local_uuid']], indent=2, default=datetime_to_json, sort_keys=True))
 					raise 'wut'
 			all_subvols2[i['local_uuid']] = i
-			#logging.debug(json.dumps(i, indent=2, default=datetime_to_json))
+			logging.info('_parent_candidates2:' + json.dumps(i, indent=2, default=datetime_to_json, sort_keys=True))
 
 		logging.info(f'_parent_candidates2 all_subvols: {len(all_subvols)}')
 		yield from VolWalker(all_subvols2, direction).walk(my_uuid)
