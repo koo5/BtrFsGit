@@ -17,6 +17,7 @@ class Base(DeclarativeBase):
 
 class Snapshot(Base):
 	__tablename__ = "snapshots"
+	id: Mapped[str] = mapped_column(nullable=False)
 	fs_uuid: Mapped[str] = mapped_column(nullable=False)
 	local_uuid: Mapped[str] = mapped_column(primary_key=True)
 	parent_uuid: Mapped[Optional[str]] = mapped_column()

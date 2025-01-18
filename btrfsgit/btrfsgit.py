@@ -395,6 +395,7 @@ class Bfg:
 
 		for snapshot in snapshots:
 			snapshot['host'] = s.host
+			snapshot['id'] = snapshot['fs_uuid'] + '_' + snapshot['local_uuid']
 
 		logbtrfs.info(f'get_all_local_bfg_snapshots_on_filesystem: {len(snapshots)=}')
 		return Res(snapshots)
@@ -413,17 +414,19 @@ class Bfg:
 		session = db.session()
 		with session.begin():
 			logbfg.info(f'insert missing snapshots into db...')
+
 			all_ = session.query(db.Snapshot).all()
-			all = {s.local_uuid: s for s in all_}
+			all = {s.id: s for s in all_}
 
 			for i,snapshot in enumerate(snapshots):
 				if i % 100 == 0:
 					logbfg.info(f'{i=}')
 				logbfg.debug(f'{snapshot=}')
-				db_snapshot = all.get(snapshot['local_uuid'])
+				db_snapshot = all.get(snapshot['id'])
 				logbfg.debug(f'{db_snapshot=}')
 				if db_snapshot is None:
 					db_snapshot = db.Snapshot(
+						id=snapshot['fs_uuid']+'_'+snapshot['local_uuid'],
 						local_uuid=snapshot['local_uuid'],
 						parent_uuid=snapshot['parent_uuid'],
 						received_uuid=snapshot['received_uuid'],
@@ -440,7 +443,7 @@ class Bfg:
 			for i,db_snapshot in enumerate(all_):
 				if i % 1000 == 0:
 					logbfg.info(f'{i=}')
-				if db_snapshot.host != s.host or Path(db_snapshot.fs) != Path(s._local_fs_id5_mount_point):
+				if db_snapshot.host != s.host or Path(db_snapshot.fs) != Path(s._local_fs_id5_mount_point): # todo check fs_uuid
 					continue
 				if db_snapshot.local_uuid not in local_uuids:
 					logbfg.info(f'mark {db_snapshot.local_uuid} as deleted')
