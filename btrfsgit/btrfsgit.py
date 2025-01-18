@@ -375,10 +375,10 @@ class Bfg:
 		return Res(snapshots)
 
 
-	def get_all_local_bfg_snapshots_on_filesystem(s):
-		"""list all read-only subvolumes on the filesystem that exist somewhere under any .bfg_snapshots dir"""
-		logbfg.info	(f'get_all_local_bfg_snapshots_on_filesystem...')
-		logger = logging.getLogger('get_all_local_bfg_snapshots_on_filesystem')
+	def get_all_subvols_on_filesystem(s):
+		"""list all subvolumes on the filesystem"""
+		logbfg.info	(f'get_all_subvols_on_filesystem...')
+		logger = logging.getLogger('get_all_subvols_on_filesystem')
 		subvols = s._get_subvolumes(s._local_cmd, s._local_fs_id5_mount_point, 'local')
 		logger.debug(f'{subvols=}')
 
@@ -386,19 +386,11 @@ class Bfg:
 		for subvol in subvols:
 			logger.debug(f'{subvol=}')
 			subvol['fs_uuid'] = s._local_fs_uuid
+			subvol['id'] = subvol['fs_uuid'] + '_' + subvol['local_uuid']
+			subvol['host'] = s.host
 
-			if subvol['ro'] and ('.bfg_snapshots' in Path(subvol['path']).parts):
-				logger.debug(f'YES')
-				snapshots.append(subvol)
-			else:
-				logger.debug(f'NO')
-
-		for snapshot in snapshots:
-			snapshot['host'] = s.host
-			snapshot['id'] = snapshot['fs_uuid'] + '_' + snapshot['local_uuid']
-
-		logbtrfs.info(f'get_all_local_bfg_snapshots_on_filesystem: {len(snapshots)=}')
-		return Res(snapshots)
+		logbtrfs.info(f'get_all_subvols_on_filesystem: {len(subvols)=}')
+		return Res(subvols)
 
 
 
@@ -409,45 +401,32 @@ class Bfg:
 			walk the snapshots and insert missing snapshots into db
 			walk the table and mark missing snapshots as deleted in db
 		"""
-		snapshots = s.get_all_local_bfg_snapshots_on_filesystem().val
+		snapshots = s.get_all_subvols_on_filesystem().val
 		logbfg.info(f'db.session()...')
 		session = db.session()
 		with session.begin():
-			logbfg.info(f'insert missing snapshots into db...')
 
-			all_ = session.query(db.Snapshot).all()
-			all = {s.id: s for s in all_}
+			logbfg.info(f'purge db of all snapshots with fs_uuid={s._local_fs_uuid}...')
+			session.query(db.Snapshot).filter(db.Snapshot.fs_uuid == s._local_fs_uuid).delete()
 
+			logbfg.info(f'insert snapshots into db...')
 			for i,snapshot in enumerate(snapshots):
 				if i % 100 == 0:
 					logbfg.info(f'{i=}')
 				logbfg.debug(f'{snapshot=}')
-				db_snapshot = all.get(snapshot['id'])
-				logbfg.debug(f'{db_snapshot=}')
-				if db_snapshot is None:
-					db_snapshot = db.Snapshot(
-						id=snapshot['fs_uuid']+'_'+snapshot['local_uuid'],
-						local_uuid=snapshot['local_uuid'],
-						parent_uuid=snapshot['parent_uuid'],
-						received_uuid=snapshot['received_uuid'],
-						host=snapshot['host'],
-						fs=s._local_fs_id5_mount_point,
-						path=snapshot['path'],
-						fs_uuid=snapshot['fs_uuid'],
-						subvol_id=snapshot['subvol_id'],
-						ro=snapshot['ro'],
-					)
-					session.add(db_snapshot)
-			logbfg.info(f'mark missing snapshots as deleted in db...')
-			local_uuids = [s['local_uuid'] for s in snapshots]
-			for i,db_snapshot in enumerate(all_):
-				if i % 1000 == 0:
-					logbfg.info(f'{i=}')
-				if db_snapshot.host != s.host or Path(db_snapshot.fs) != Path(s._local_fs_id5_mount_point): # todo check fs_uuid
-					continue
-				if db_snapshot.local_uuid not in local_uuids:
-					logbfg.info(f'mark {db_snapshot.local_uuid} as deleted')
-					db_snapshot.deleted = True
+				db_snapshot = db.Snapshot(
+					id=snapshot['fs_uuid']+'_'+snapshot['local_uuid'],
+					local_uuid=snapshot['local_uuid'],
+					parent_uuid=snapshot['parent_uuid'],
+					received_uuid=snapshot['received_uuid'],
+					host=snapshot['host'],
+					fs=s._local_fs_id5_mount_point,
+					path=snapshot['path'],
+					fs_uuid=snapshot['fs_uuid'],
+					subvol_id=snapshot['subvol_id'],
+					ro=snapshot['ro'],
+				)
+				session.add(db_snapshot)
 			logbfg.info(f'commit...')
 
 
@@ -955,12 +934,17 @@ class Bfg:
 		"""
 		all_subvols2 = {}
 		for i in all_subvols:
+
 			if i['local_uuid'] in all_subvols2:
 				if i != all_subvols2[i['local_uuid']]:
 					logging.warning('duplicate subvols:')
 					logging.warning(json.dumps(i, indent=2, default=datetime_to_json, sort_keys=True))
 					logging.warning(json.dumps(all_subvols2[i['local_uuid']], indent=2, default=datetime_to_json, sort_keys=True))
 					raise 'wut'
+
+			if not '.bfg_snapshots' in Path(i['path']).parts:
+				continue
+
 			all_subvols2[i['local_uuid']] = i
 			logging.info('_parent_candidates2:' + json.dumps(i, indent=2, default=datetime_to_json, sort_keys=True))
 
