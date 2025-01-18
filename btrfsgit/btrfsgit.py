@@ -379,7 +379,7 @@ class Bfg:
 		"""list all read-only subvolumes on the filesystem that exist somewhere under any .bfg_snapshots dir"""
 		logbfg.info	(f'get_all_local_bfg_snapshots_on_filesystem...')
 		logger = logging.getLogger('get_all_local_bfg_snapshots_on_filesystem')
-		subvols = s._get_subvolumes(s._local_cmd, s._local_fs_id5_mount_point)
+		subvols = s._get_subvolumes(s._local_cmd, s._local_fs_id5_mount_point, 'local')
 		logger.debug(f'{subvols=}')
 
 		snapshots = []
@@ -679,9 +679,7 @@ class Bfg:
 	def most_recent_common_snapshots(s, all, SUBVOLUME):
 		"""
 		Find the most recent common snapshots between the local and each remote filesystem.
-
 		"""
-
 		result = []
 
 		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
@@ -703,7 +701,7 @@ class Bfg:
 				else:
 					x['machine'] = 'other'
 				all2.append(x)
-				logbfg.info(f"  {x=}")
+				#logbfg.info(f"  {x=}")
 
 			logbfg.info(f"all2: {len(all2)}")
 			logbfg.info(f"_parent_candidates2...")
@@ -948,9 +946,7 @@ class Bfg:
 		"""
 		my uuid is the local_uuid of the local rw subvolume that we're trying to transfer to the remote machine.
 		direction is either ('local', 'remote') or ('remote', 'local')
-
 		"""
-
 		all_subvols2 = {}
 		for i in all_subvols:
 			if i['local_uuid'] in all_subvols2:
@@ -960,10 +956,9 @@ class Bfg:
 					logging.warning(json.dumps(all_subvols2[i['local_uuid']], indent=2, default=datetime_to_json))
 					raise 'wut'
 			all_subvols2[i['local_uuid']] = i
+			#logging.debug(json.dumps(i, indent=2, default=datetime_to_json))
 
-		logging.debug('all_subvols2:')
-		logging.debug(json.dumps(all_subvols2, indent=2, default=datetime_to_json))
-
+		logging.info(f'_parent_candidates2 all_subvols: {len(all_subvols)}')
 		yield from VolWalker(all_subvols2, direction).walk(my_uuid)
 
 
