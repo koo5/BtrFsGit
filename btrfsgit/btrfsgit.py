@@ -236,6 +236,7 @@ class Bfg:
 		sv['local_uuid'] = lines[2].split()[1]
 		sv['subvol_id'] = int(lines[6].split()[2])
 		sv['ro'] = lines[11].split()[1] == 'readonly'
+		sv['src'] = 'btrfs_sub_show'
 
 		r = Res(sv)
 		logbtrfs.debug('get_subvol: %s', str(sv))
@@ -923,19 +924,17 @@ class Bfg:
 		remote_subvols = s._get_subvolumes(s._remote_cmd, remote_subvolume, 'remote')
 		local_subvols = s._get_subvolumes(s._local_cmd, subvolume, 'local')
 
-		other_subvols = load_subvol_dumps()
-
-		toplevel_subvol = s.get_subvol(s._local_cmd, subvolume).val
-		toplevel_subvol['src'] = 'local_btrfs'
-
-		toplevel_subvols = [toplevel_subvol]
+		#other_subvols = load_subvol_dumps()
+		#toplevel_subvol = s.get_subvol(s._local_cmd, subvolume).val
+		#toplevel_subvol['src'] = 'get_subvol'
+		#toplevel_subvols = [toplevel_subvol]
 
 		all_subvols = []
 		for machine, lst in [
 			('remote', remote_subvols),
 			('local', local_subvols),
-			('other', other_subvols),
-			('local', toplevel_subvols)
+#			('other', other_subvols),
+#			('local', toplevel_subvols)
 		]:
 			for v in lst:
 				v['machine'] = machine
@@ -957,8 +956,8 @@ class Bfg:
 			if i['local_uuid'] in all_subvols2:
 				if i != all_subvols2[i['local_uuid']]:
 					logging.warning('duplicate subvols:')
-					logging.warning(i)
-					logging.warning(all_subvols2[i['local_uuid']])
+					logging.warning(json.dumps(i, indent=2, default=datetime_to_json))
+					logging.warning(json.dumps(all_subvols2[i['local_uuid']], indent=2, default=datetime_to_json))
 					raise 'wut'
 			all_subvols2[i['local_uuid']] = i
 
