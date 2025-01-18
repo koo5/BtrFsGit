@@ -39,7 +39,7 @@ def datetime_to_json(o):
 
 
 
-def prompt(question):
+def prompt(question, dry_run=False):
 		"""Ask a yes/no question via raw_input() and return their answer.
 
 		"question" is a string that is presented to the user.
@@ -63,6 +63,9 @@ def prompt(question):
 
 		while True:
 			sys.stdout.write(question + prompt)
+			if dry_run:
+				sys.stdout.write('\n')
+				return False
 			choice = input().lower()
 			if default is not None and choice == "":
 				return valid[default]
@@ -94,13 +97,13 @@ class Bfg:
 		s._local_fs_uuid = s.get_fs()
 
 
-	def _yes(s, msg):
+	def _yes(s, msg, dry_run=False):
 		"""
 		interactive confirmation prompt for dangerous operations
 		"""
 		if s._yes_was_given_on_command_line:
 			return True
-		return prompt(msg)
+		return prompt(msg, dry_run)
 
 	"""
 
@@ -559,18 +562,18 @@ class Bfg:
 
 		elif age_seconds < 3600:
 			# Bucket by minute
-			return dt.strftime("minute-%Y%m%d%H%M")
+			return dt.strftime("minute-%Y_%m_%d_%H_%M")
 
 		elif age_seconds < 86400:
 			# Bucket by hour
-			return dt.strftime("hour-%Y%m%d%H")
+			return dt.strftime("hour-%Y_%m_%d_%H")
 
 		elif age_seconds < 2592000:
 			# ~30 days
-			return dt.strftime("day-%Y%m%d")
+			return dt.strftime("day-%Y_%m_%d")
 
 		else:
-			return dt.strftime("month-%Y%m")  # year-month
+			return dt.strftime("month-%Y_%m")  # year-month
 
 
 
@@ -592,7 +595,7 @@ class Bfg:
 		return grouped
 
 
-	def prune(s, SUBVOLUME, CHECK_WITH_DB=True):
+	def prune(s, SUBVOLUME, CHECK_WITH_DB=True, DRY_RUN=False):
 		"""
 		Prune old snapshots under SUBVOLUME according to a time-based retention policy.
 
@@ -611,49 +614,40 @@ class Bfg:
 
 		all = s.all_snapshots_from_db()
 		local_snapshots = s.local_bfg_snapshots(all, SUBVOLUME)
-		now = datetime.now()
+		local_snapshots = sorted(local_snapshots, key=lambda x: x['dt'])
+		if len(local_snapshots) == 0:
+			logbfg.info(f"No snapshots found for {SUBVOLUME}")
+			return
+		newest = Path(local_snapshots[0]['path'])
 		buckets = s.put_snapshots_into_buckets(local_snapshots)
-		mrcs = set([x['path'] for x in s.most_recent_common_snapshots(all, SUBVOLUME)])
-
+		mrcs = set([Path(x['path']) for x in s.most_recent_common_snapshots(all, SUBVOLUME)])
+		logbfg.info(f"{mrcs=}")
 
 		for bucket, snaplist in buckets.items():
 
 			logbfg.info(f"Bucket: {bucket}")
-			for snap in snaplist:
-				logbfg.info(f"  {snap['path']}")
 
+			for i,snap in enumerate(snaplist):
 
-			if len(snaplist) <= 2:
-				continue
-
-			# We sort ascending by id, so oldest => snaplist[0], newest => snaplist[-1]
-			oldest = snaplist[0]
-			newest = snaplist[-1]
-
-			# We keep oldest and newest for sure
-			keep_set = mrcs.union({Path(oldest['path']), Path(newest['path'])})
-
-			newest_dt = newest['dt']
-
-			# We'll iterate from newest to oldest (reverse) so that we keep
-			# the *newest* snapshot in each time bucket.
-			# skip the very newest since we already keep it
-			# skip the very oldest until we handle it at the end
-			middle_snaps = snaplist[1:-1]  # everything except oldest & newest
-
-			for snap in middle_snaps:
 				path = Path(snap['path'])
-				if path not in keep_set:
 
-					logbfg.info(f"prunable: {path}")
+				is_newest = path == newest
+				is_mrc = path in mrcs
+				is_last = i == len(snaplist) - 1
+				#logbfg.info(f"{path} {is_newest=} {is_mrc=} {is_last=}, {i=}/{len(snaplist)}")
+				is_prunable = not is_newest and not is_mrc and not is_last
+
+				logbfg.info(f"  {snap['path']}" + (" (mrcs)" if is_mrc else "") + (" (newest)" if is_newest else (" (last)" if is_last else "") + (" (prune?)" if is_prunable else "")))
+
+				if is_prunable and not DRY_RUN:
 
 					cmd = ['btrfs', 'subvolume', 'delete', str(path)]
 					if not s._yes(shlex.join(cmd)):
-						exit(1)
+						continue
 					s._local_cmd(cmd)
 					_prerr(f"Deleted snapshot: {path}")
 
-		_prerr("Prune completed.")
+		_prerr("No more buckets.")
 
 
 
@@ -679,11 +673,12 @@ class Bfg:
 
 		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
 		fss = s.remote_fs_uuids(all)
+		logbfg.info(f"{fss=}")
 
 		for fs_uuid, fs in fss.items():
 			hosts = fs['hosts']
 
-			logbfg.debug(f"most_recent_common_snapshots for {fs_uuid=} (hosts:{hosts})....")
+			logbfg.info(f"most_recent_common_snapshots for {fs_uuid=} (hosts:{hosts})....")
 
 			all2 = []
 			for snap in all:
@@ -695,11 +690,16 @@ class Bfg:
 				else:
 					x['machine'] = 'other'
 				all2.append(x)
+				logbfg.info(f"  {x=}")
 
+			logbfg.info(f"all2: {len(all2)}")
+			logbfg.info(f"_parent_candidates2...")
 			candidates = list(s._parent_candidates2(all2, s._subvol_uuid , ('local', 'remote')))
 
+			logbfg.info(f"candidates: {len(candidates)}")
+
 			for candidate in candidates:
-				logbfg.debug(f"  {candidate['local_uuid']}")
+				logbfg.info(f"  {candidate['local_uuid']}")
 
 			if len(candidates) > 0:
 				result.append(Path(candidates[0]))
