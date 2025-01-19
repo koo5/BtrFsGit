@@ -28,9 +28,31 @@ import btrfsgit.db as db
 
 
 def datetime_to_json(o):
-    if isinstance(o, datetime):
-        return o.isoformat()
-    raise TypeError(f"Type {type(o)} not serializable")
+	"""
+	json serialization for datetime objects
+	"""
+	if isinstance(o, datetime):
+		return o.isoformat()
+	raise TypeError(f"Type {type(o)} not serializable")
+
+
+def dash_is_none(string):
+	if string == '-':
+		return None
+	else:
+		return string
+
+
+def try_unlink(f):
+	try:
+		os.unlink(f)
+	except FileNotFoundError:
+		pass
+
+
+def _prerr(*args, sep=' ', **kwargs):
+	message = sep.join(str(arg) for arg in args)
+	logging.info(message, **kwargs)
 
 
 class Res:
@@ -103,6 +125,63 @@ class Bfg:
 		s.host = subprocess.check_output(['hostname'], text=True).strip()
 
 
+	def _yes(s, msg, dry_run=False):
+		"""
+		interactive confirmation prompt for dangerous operations
+		"""
+		if s._yes_was_given_on_command_line:
+			return True
+		return prompt(msg, dry_run)
+
+	"""
+
+	helper functions for running subprocessess locally and over ssh
+
+	"""
+
+	def _remote_cmd(s, cmd, die_on_error=True, logger=None):
+		"""potentially remote command"""
+		if logger is None:
+			logger = logging.getLogger('btrfs')
+		if not isinstance(cmd, list):
+			cmd = shlex.split(cmd)
+		else:
+			cmd = [str(x) for x in cmd]
+		if s._sshstr != '':
+			ssh = shlex.split(s._sshstr)
+			cmd2 = ssh + s._sudo + cmd
+			logger.debug(shlex.join(cmd2))
+			return s._cmd(cmd2, die_on_error)
+		else:
+			return s._local_cmd(cmd, die_on_error)
+
+
+	def _local_cmd(s, c, die_on_error=True, logger=None):
+		if logger is None:
+			logger = logging.getLogger('btrfs')
+		if not isinstance(c, list):
+			c = shlex.split(c)
+		c = s._sudo + [str(x) for x in c]
+		logger.debug(shlex.join(c))
+		return s._cmd(c, die_on_error)
+
+
+	def _cmd(s, c, die_on_error):
+		try:
+			return subprocess.check_output(c, text=True)
+		except Exception as e:
+			if die_on_error:
+				_prerr(e)
+				exit(1)
+			else:
+				return -1
+
+
+
+	"""
+	determine id5 mount point
+	"""
+
 	def local_fs_id5_mount_point(self, subvolume):
 		if subvolume not in self._local_fs_id5_mount_points:
 			self._local_fs_id5_mount_points[subvolume] = self.find_local_fs_id5_mount_point(subvolume)
@@ -138,6 +217,64 @@ class Bfg:
 				raise Exception(f'could not find id5 for remote {subvolume}, id5 file missing?')
 
 
+
+	"""
+	low-level btrfs stuff
+	"""
+
+
+	def _get_subvolumes(s, command_runner, subvolume, src):
+		"""
+		:param subvolume: filesystem path to a subvolume on the filesystem that we want to get a list of subvolumes of
+		:return: list of records, one for each subvolume on the filesystem
+		"""
+		subvols = []
+		logger = logging.getLogger('_get_subvolumes')
+
+		cmd = ['btrfs', 'subvolume', 'list', '-q', '-t', '-R', '-u']
+		for line in command_runner(cmd + [subvolume], logger=logbtrfs).splitlines()[2:]:
+			subvol = s._make_snapshot_struct_from_sub_list_output_line(line)
+			subvol['src'] = src + '_btrfs'
+			logger.debug(subvol)
+			subvols.append(subvol)
+
+		ro_subvols = set()
+		for line in command_runner(cmd + ['-r', subvolume], logger=logbtrfs).splitlines()[2:]:
+			subvol = s._make_snapshot_struct_from_sub_list_output_line(line)
+			ro_subvols.add(subvol['local_uuid'])
+		# _prerr(str(ro_subvols))
+
+		for i in subvols:
+			i['ro'] = i['local_uuid'] in ro_subvols
+			# we should not need this for remote subvolumes:
+			if src == 'local':
+				i['host'] = s.host
+				i['fs_uuid'] = s.local_fs_uuid(subvolume)
+
+		subvols.sort(key=lambda sv: -sv['subvol_id'])
+		logbtrfs.debug(f'_get_subvolumes: {len(subvols)=}')
+		return subvols
+
+
+	def _make_snapshot_struct_from_sub_list_output_line(s, line):
+		#logging.debug('line:'+line)
+		items = line.split()
+		subvol_id = items[0]
+		parent_uuid = dash_is_none(items[3])
+		received_uuid = dash_is_none(items[4])
+		local_uuid = items[5]
+
+		snapshot = {}
+		snapshot['received_uuid'] = received_uuid
+		snapshot['parent_uuid'] = parent_uuid
+		snapshot['local_uuid'] = local_uuid
+		snapshot['subvol_id'] = int(subvol_id)
+		snapshot['path'] = s.local_fs_id5_mount_point(items[6]) / items[6])
+		logging.debug(snapshot)
+
+		return snapshot
+
+
 	def local_fs_uuid(self, subvol):
 		if subvol not in self._local_fs_uuid:
 			self._local_fs_uuid[subvol] = self.get_fs_uuid(subvol)
@@ -147,59 +284,181 @@ class Bfg:
 		return self._local_fs_uuid[subvol]
 
 
-	def _yes(s, msg, dry_run=False):
+	def get_fs_uuid(s, subvol):
+		l = s._local_cmd(f'btrfs filesystem show ' + s.local_fs_id5_mount_point(subvol)).splitlines()[0]
+		r = r"Label:\s+'.*'\s+uuid:\s+([a-f0-9-]+)$"
+		fs_uuid = re.match(r, l).group(1)
+		logbfg.info(f'get_fs: {fs_uuid=}')
+		return fs_uuid
+
+
+	def get_subvol(s, runner, path):
+		out = runner(f'btrfs sub show {path}')
+		lines = out.splitlines()
+
+		sv = {}
+		sv['received_uuid'] = dash_is_none(lines[4].split()[2])
+		sv['parent_uuid'] = dash_is_none(lines[3].split()[2])
+		sv['local_uuid'] = lines[2].split()[1]
+		sv['subvol_id'] = int(lines[6].split()[2])
+		sv['ro'] = lines[11].split()[1] == 'readonly'
+		sv['src'] = 'btrfs_sub_show'
+
+		r = Res(sv)
+		logbtrfs.debug('get_subvol: %s', str(sv))
+		return r
+
+
+	"""
+	db stuff
+	"""
+
+
+	def update_db(s, FS):
 		"""
-		interactive confirmation prompt for dangerous operations
+		blast the db with all the subvols we can find on the filesystem.
 		"""
-		if s._yes_was_given_on_command_line:
-			return True
-		return prompt(msg, dry_run)
+		snapshots = s.get_all_subvols_on_filesystem(FS).val
+		logbfg.info(f'db.session()...')
+		session = db.session()
+		with session.begin():
+			logbfg.info(f'got db session...')
+
+			logbfg.info(f'purge db of all snapshots with fs_uuid={s.local_fs_uuid(FS)}...')
+			session.query(db.Snapshot).filter(db.Snapshot.fs_uuid == s.local_fs_uuid(FS)).delete()
+
+			logbfg.info(f'insert snapshots into db...')
+			for i,snapshot in enumerate(snapshots):
+				if i % 100 == 0:
+					logbfg.info(f'{i=}')
+				logbfg.debug(f'{snapshot=}')
+				db_snapshot = db.Snapshot(
+					id=snapshot['fs_uuid']+'_'+snapshot['local_uuid'],
+					local_uuid=snapshot['local_uuid'],
+					parent_uuid=snapshot['parent_uuid'],
+					received_uuid=snapshot['received_uuid'],
+					host=snapshot['host'],
+					fs=FS,
+					path=snapshot['path'],
+					fs_uuid=snapshot['fs_uuid'],
+					subvol_id=snapshot['subvol_id'],
+					ro=snapshot['ro'],
+				)
+				session.add(db_snapshot)
+			logbfg.info(f'commit...')
+
+
+	def all_snapshots_from_db(s):
+		logbfg.info(f'all_snapshots_from_db...')
+		session = db.session()
+		with session.begin():
+			logbfg.info(f'got db session.')
+			logbfg.info(f'query all snapshots from db...')
+			all = list(session.query(db.Snapshot).options(undefer("*")).all())
+			logbfg.info(f'got {len(all)} snapshots from db.')
+
+			r = [{
+				column.name: getattr(x, column.name)
+				for column in x.__table__.columns} for x in all]
+
+			for x in r:
+				x['path'] = Path(x['path'])
+				if '.bfg_snapshots' in x['path'].parts:
+					x['dt'] = s.snapshot_dt(x)
+				x['src'] = 'db'
+
+			return r
+
+
+	def remote_fs_uuids(s, all, subvol):
+		fss = {}
+		for snap in all:
+			snap_fs_uuid = snap['fs_uuid']
+			if snap_fs_uuid not in fss:
+				fss[snap_fs_uuid] = {'hosts': set()}
+			fss[snap_fs_uuid]['hosts'].add(snap['host'])
+		del fss[s.local_fs_uuid(subvol)]
+		return fss
+
+
 
 	"""
-
-	helper functions for running subprocessess locally and over ssh
-
+	helper bfg stuff
 	"""
 
-	def _remote_cmd(s, cmd, die_on_error=True, logger=None):
-		"""potentially remote command"""
-		if logger is None:
-			logger = logging.getLogger('btrfs')
-		if not isinstance(cmd, list):
-			cmd = shlex.split(cmd)
+	def bucket(s, dt: datetime, now: datetime) -> str:
+		age_seconds = (now - dt).total_seconds()
+
+		if age_seconds < 60:
+			return "under-1-min"
+
+		elif age_seconds < 3600:
+			# Bucket by minute
+			return dt.strftime("minute-%Y_%m_%d_%H_%M")
+
+		elif age_seconds < 86400:
+			# Bucket by hour
+			return dt.strftime("hour-%Y_%m_%d_%H")
+
+		elif age_seconds < 2592000:
+			# ~30 days
+			return dt.strftime("day-%Y_%m_%d")
+
 		else:
-			cmd = [str(x) for x in cmd]
-		if s._sshstr != '':
-			ssh = shlex.split(s._sshstr)
-			cmd2 = ssh + s._sudo + cmd
-			logger.debug(shlex.join(cmd2))
-			return s._cmd(cmd2, die_on_error)
+			return dt.strftime("month-%Y_%m")  # year-month
+
+
+
+	def put_snapshots_into_buckets(s, snapshots):
+		"""
+		Group snapshots by bucket.
+		"""
+		grouped = defaultdict(list)
+		now = datetime.now()
+
+		for snap in snapshots:
+			dt = snap['dt']
+			b = s.bucket(dt, now)
+			grouped[b].append(snap)
+
+		for bucket, snaplist in grouped.items():
+			snaplist.sort(key=lambda s: s['dt'])
+
+		return grouped
+
+
+	def _figure_out_snapshot_name(s, SUBVOLUME, TAG, SNAPSHOT, SNAPSHOT_NAME):
+		if TAG and SNAPSHOT:
+			_prerr(f'please specify SNAPSHOT or TAG, not both')
+			sys.exit(-1)
+		if TAG and SNAPSHOT_NAME:
+			_prerr(f'please specify SNAPSHOT_NAME or TAG, not both')
+			sys.exit(-1)
+		if SNAPSHOT and SNAPSHOT_NAME:
+			_prerr(f'please specify SNAPSHOT_NAME or SNAPSHOT, not both')
+			sys.exit(-1)
+
+		if SNAPSHOT is not None:
+			SNAPSHOT = Path(SNAPSHOT).absolute()
 		else:
-			return s._local_cmd(cmd, die_on_error)
+			SNAPSHOT = s.calculate_default_snapshot_path('local', SUBVOLUME, TAG, SNAPSHOT_NAME).val
+		return SNAPSHOT
 
-	def _local_cmd(s, c, die_on_error=True, logger=None):
-		if logger is None:
-			logger = logging.getLogger('btrfs')
-		if not isinstance(c, list):
-			c = shlex.split(c)
-		c = s._sudo + [str(x) for x in c]
-		logger.debug(shlex.join(c))
-		return s._cmd(c, die_on_error)
 
-	def _cmd(s, c, die_on_error):
-		try:
-			return subprocess.check_output(c, text=True)
-		except Exception as e:
-			if die_on_error:
-				_prerr(e)
-				exit(1)
-			else:
-				return -1
+	def snapshot_dt(s, snapshot):
+		dname = snapshot['path'].name
+		# Typical pattern might be:
+		#   <subvol>_bfg_snapshots_<timestamp>_<tag>
+		#   <subvol>_<timestamp>_<tag>
+		# We'll attempt to capture all via two regex tries:
 
-	"""
+		m = re.match(r'(.+)_bfg_snapshots_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
+		if m is None:
+			m = re.match(r'(.+)_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
+		if m is None:
+			raise Exception(f'could not parse snapshot folder: {dname}')
+		return datetime.strptime(m.group(2), "%Y-%m-%d_%H-%M-%S")
 
-	helper stuff
-	"""
 
 	def calculate_default_snapshot_parent_dir(s, machine: str, SUBVOLUME):
 		"""
@@ -246,6 +505,7 @@ class Bfg:
 		logging.getLogger('utils').info(f'calculate_default_snapshot_parent_dir: {SUBVOLUME=} -> {r=}')
 		return Res(r)
 
+
 	def calculate_default_snapshot_path(s, machine, SUBVOLUME, TAG, NAME_OVERRIDE=None):  # , TAG2):
 		"""
 		calculate the filesystem path where a snapshot should go, given a subvolume and a tag
@@ -268,29 +528,6 @@ class Bfg:
 		return res
 
 
-	def get_fs_uuid(s, subvol):
-		l = s._local_cmd(f'btrfs filesystem show ' + s.local_fs_id5_mount_point(subvol)).splitlines()[0]
-		r = r"Label:\s+'.*'\s+uuid:\s+([a-f0-9-]+)$"
-		fs_uuid = re.match(r, l).group(1)
-		logbfg.info(f'get_fs: {fs_uuid=}')
-		return fs_uuid
-
-
-	def get_subvol(s, runner, path):
-		out = runner(f'btrfs sub show {path}')
-		lines = out.splitlines()
-
-		sv = {}
-		sv['received_uuid'] = dash_is_none(lines[4].split()[2])
-		sv['parent_uuid'] = dash_is_none(lines[3].split()[2])
-		sv['local_uuid'] = lines[2].split()[1]
-		sv['subvol_id'] = int(lines[6].split()[2])
-		sv['ro'] = lines[11].split()[1] == 'readonly'
-		sv['src'] = 'btrfs_sub_show'
-
-		r = Res(sv)
-		logbtrfs.debug('get_subvol: %s', str(sv))
-		return r
 
 	"""
 
@@ -352,16 +589,9 @@ class Bfg:
 
 
 
-
 	"""
 	basic commands
 	"""
-
-
-
-	def get_local_subvol(s, SUBVOLUME):
-		"""get info about a subvolume"""
-		return s.get_subvol(s._local_cmd, SUBVOLUME)
 
 
 
@@ -379,25 +609,6 @@ class Bfg:
 				snapshot['dt'] = s.snapshot_dt(snapshot)
 		logbfg.info(f'get_local_bfg_snapshots_for_subvol: {len(result)=}')
 		return Res(result)
-
-
-
-	def snapshot_dt(s, snapshot):
-
-		dname = snapshot['path'].name
-		# Typical pattern might be:
-		#   <subvol>_bfg_snapshots_<timestamp>_<tag>
-		#   <subvol>_<timestamp>_<tag>
-		# We'll attempt to capture all via two regex tries:
-
-		m = re.match(r'(.+)_bfg_snapshots_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
-		if m is None:
-			m = re.match(r'(.+)_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
-		if m is None:
-			raise Exception(f'could not parse snapshot folder: {dname}')
-		return datetime.strptime(m.group(2), "%Y-%m-%d_%H-%M-%S")
-
-
 
 
 	def get_local_snapshots(s, SUBVOLUME):
@@ -437,65 +648,6 @@ class Bfg:
 
 		logbtrfs.info(f'get_all_subvols_on_filesystem: {len(subvols)=}')
 		return Res(subvols)
-
-
-
-	def update_db(s, FS):
-		"""
-		blast the db with all the subvols we can find on the filesystem.
-		"""
-		snapshots = s.get_all_subvols_on_filesystem(FS).val
-		logbfg.info(f'db.session()...')
-		session = db.session()
-		with session.begin():
-			logbfg.info(f'got db session...')
-
-			logbfg.info(f'purge db of all snapshots with fs_uuid={s.local_fs_uuid(FS)}...')
-			session.query(db.Snapshot).filter(db.Snapshot.fs_uuid == s.local_fs_uuid(FS)).delete()
-
-			logbfg.info(f'insert snapshots into db...')
-			for i,snapshot in enumerate(snapshots):
-				if i % 100 == 0:
-					logbfg.info(f'{i=}')
-				logbfg.debug(f'{snapshot=}')
-				db_snapshot = db.Snapshot(
-					id=snapshot['fs_uuid']+'_'+snapshot['local_uuid'],
-					local_uuid=snapshot['local_uuid'],
-					parent_uuid=snapshot['parent_uuid'],
-					received_uuid=snapshot['received_uuid'],
-					host=snapshot['host'],
-					fs=FS,
-					path=snapshot['path'],
-					fs_uuid=snapshot['fs_uuid'],
-					subvol_id=snapshot['subvol_id'],
-					ro=snapshot['ro'],
-				)
-				session.add(db_snapshot)
-			logbfg.info(f'commit...')
-
-
-	def all_snapshots_from_db(self):
-		"""
-		"""
-		logbfg.info(f'all_snapshots_from_db...')
-		session = db.session()
-		with session.begin():
-			logbfg.info(f'got db session.')
-			logbfg.info(f'query all snapshots from db...')
-			all = list(session.query(db.Snapshot).options(undefer("*")).all())
-			logbfg.info(f'got {len(all)} snapshots from db.')
-
-			r = [{
-				column.name: getattr(x, column.name)
-				for column in x.__table__.columns} for x in all]
-
-			for x in r:
-				x['path'] = Path(x['path'])
-				if '.bfg_snapshots' in x['path'].parts:
-					x['dt'] = self.snapshot_dt(x)
-				x['src'] = 'db'
-
-			return r
 
 
 
@@ -567,7 +719,6 @@ class Bfg:
 			return Res(snapshot)
 
 
-
 	def local_commit(s, SUBVOLUME='/', TAG=None, SNAPSHOT=None, SNAPSHOT_NAME=None):
 		"""
 		come up with a filesystem path for a snapshot, and snapshot SUBVOLUME.
@@ -580,66 +731,6 @@ class Bfg:
 		return Res(SNAPSHOT)
 
 
-
-	def _figure_out_snapshot_name(s, SUBVOLUME, TAG, SNAPSHOT, SNAPSHOT_NAME):
-		if TAG and SNAPSHOT:
-			_prerr(f'please specify SNAPSHOT or TAG, not both')
-			sys.exit(-1)
-		if TAG and SNAPSHOT_NAME:
-			_prerr(f'please specify SNAPSHOT_NAME or TAG, not both')
-			sys.exit(-1)
-		if SNAPSHOT and SNAPSHOT_NAME:
-			_prerr(f'please specify SNAPSHOT_NAME or SNAPSHOT, not both')
-			sys.exit(-1)
-
-		if SNAPSHOT is not None:
-			SNAPSHOT = Path(SNAPSHOT).absolute()
-		else:
-			SNAPSHOT = s.calculate_default_snapshot_path('local', SUBVOLUME, TAG, SNAPSHOT_NAME).val
-		return SNAPSHOT
-
-
-
-
-	def bucket(s, dt: datetime, now: datetime) -> str:
-		age_seconds = (now - dt).total_seconds()
-
-		if age_seconds < 60:
-			return "under-1-min"
-
-		elif age_seconds < 3600:
-			# Bucket by minute
-			return dt.strftime("minute-%Y_%m_%d_%H_%M")
-
-		elif age_seconds < 86400:
-			# Bucket by hour
-			return dt.strftime("hour-%Y_%m_%d_%H")
-
-		elif age_seconds < 2592000:
-			# ~30 days
-			return dt.strftime("day-%Y_%m_%d")
-
-		else:
-			return dt.strftime("month-%Y_%m")  # year-month
-
-
-
-	def put_snapshots_into_buckets(s, snapshots):
-		"""
-		Group snapshots by bucket.
-		"""
-		grouped = defaultdict(list)
-		now = datetime.now()
-
-		for snap in snapshots:
-			dt = snap['dt']
-			b = s.bucket(dt, now)
-			grouped[b].append(snap)
-
-		for bucket, snaplist in grouped.items():
-			snaplist.sort(key=lambda s: s['dt'])
-
-		return grouped
 
 
 	def prune(s, SUBVOLUME, CHECK_WITH_DB=True, DRY_RUN=False):
@@ -722,7 +813,6 @@ class Bfg:
 
 
 
-
 	def most_recent_common_snapshots(s, all, SUBVOLUME):
 		"""
 		Find the most recent common snapshots between the local and each remote filesystem.
@@ -764,17 +854,6 @@ class Bfg:
 
 		return result
 
-
-
-	def remote_fs_uuids(s, all, subvol):
-		fss = {}
-		for snap in all:
-			snap_fs_uuid = snap['fs_uuid']
-			if snap_fs_uuid not in fss:
-				fss[snap_fs_uuid] = {'hosts': set()}
-			fss[snap_fs_uuid]['hosts'].add(snap['host'])
-		del fss[s.local_fs_uuid(subvol)]
-		return fss
 
 
 	def remote_commit(s, REMOTE_SUBVOLUME, TAG=None, SNAPSHOT=None, SNAPSHOT_NAME=None):
@@ -1003,82 +1082,6 @@ class Bfg:
 
 		logging.info(f'_parent_candidates2 all_subvols: {len(all_subvols)}')
 		yield from VolWalker(all_subvols2, direction).walk(my_uuid)
-
-
-
-	def _get_subvolumes(s, command_runner, subvolume, src):
-		"""
-		:param subvolume: filesystem path to a subvolume on the filesystem that we want to get a list of subvolumes of
-		:return: list of records, one for each subvolume on the filesystem
-		"""
-		subvols = []
-		logger = logging.getLogger('_get_subvolumes')
-
-		cmd = ['btrfs', 'subvolume', 'list', '-q', '-t', '-R', '-u']
-		for line in command_runner(cmd + [subvolume], logger=logbtrfs).splitlines()[2:]:
-			subvol = s._make_snapshot_struct_from_sub_list_output_line(line)
-			subvol['src'] = src + '_btrfs'
-			logger.debug(subvol)
-			subvols.append(subvol)
-
-		ro_subvols = set()
-		for line in command_runner(cmd + ['-r', subvolume], logger=logbtrfs).splitlines()[2:]:
-			subvol = s._make_snapshot_struct_from_sub_list_output_line(line)
-			ro_subvols.add(subvol['local_uuid'])
-		# _prerr(str(ro_subvols))
-
-		for i in subvols:
-			i['ro'] = i['local_uuid'] in ro_subvols
-			# we should not need this for remote subvolumes:
-			if src == 'local':
-				i['host'] = s.host
-				i['fs_uuid'] = s.local_fs_uuid(subvolume)
-
-		subvols.sort(key=lambda sv: -sv['subvol_id'])
-		logbtrfs.debug(f'_get_subvolumes: {len(subvols)=}')
-		return subvols
-
-
-
-	def _make_snapshot_struct_from_sub_list_output_line(s, line):
-		#logging.debug('line:'+line)
-		items = line.split()
-		subvol_id = items[0]
-		parent_uuid = dash_is_none(items[3])
-		received_uuid = dash_is_none(items[4])
-		local_uuid = items[5]
-
-		snapshot = {}
-		snapshot['received_uuid'] = received_uuid
-		snapshot['parent_uuid'] = parent_uuid
-		snapshot['local_uuid'] = local_uuid
-		snapshot['subvol_id'] = int(subvol_id)
-		snapshot['path'] = s.local_fs_id5_mount_point(items[6]) / items[6])
-		logging.debug(snapshot)
-
-		return snapshot
-
-
-
-def dash_is_none(string):
-	if string == '-':
-		return None
-	else:
-		return string
-
-
-
-def try_unlink(f):
-	try:
-		os.unlink(f)
-	except FileNotFoundError:
-		pass
-
-
-
-def _prerr(*args, sep=' ', **kwargs):
-	message = sep.join(str(arg) for arg in args)
-	logging.info(message, **kwargs)
 
 
 
