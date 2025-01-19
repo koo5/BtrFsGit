@@ -535,28 +535,28 @@ class Bfg:
 
 	"""
 
-	def commit_and_push_and_checkout(s, SUBVOLUME, REMOTE_SUBVOLUME, PARENT: str = None):
+	def commit_and_push_and_checkout(s, SUBVOLUME, REMOTE_SUBVOL, PARENT: str = None):
 		"""
 		Snapshot your data, "btrfs send"/"btrfs receive" the snapshot to the other machine, and checkout it there
 		:param SUBVOLUME: your data
-		:param REMOTE_SUBVOLUME: desired filesystem path of your data on the other machine
+		:param REMOTE_SUBVOL: desired filesystem path of your data on the other machine
 		:return: filesystem path of the snapshot created on the other machine
 		"""
-		remote_snapshot_path = s.commit_and_push(SUBVOLUME, REMOTE_SUBVOLUME, PARENT=PARENT).val
-		s.checkout_remote(remote_snapshot_path, REMOTE_SUBVOLUME)
-		return Res(REMOTE_SUBVOLUME)
+		remote_snapshot_path = s.commit_and_push(SUBVOLUME, REMOTE_SUBVOL, PARENT=PARENT).val
+		s.checkout_remote(remote_snapshot_path, REMOTE_SUBVOL)
+		return Res(REMOTE_SUBVOL)
 
 
-	def remote_commit_and_pull(s, REMOTE_SUBVOLUME, SUBVOLUME):
+	def remote_commit_and_pull(s, REMOTE_SUBVOL, SUBVOLUME):
 		"""
 		same as commit_and_push_and_checkout but going the other direction
 
 		:param FS_ROOT_MOUNT_POINT:
-		:param REMOTE_SUBVOLUME:
+		:param REMOTE_SUBVOL:
 		:param SUBVOLUME:
 		:return:
 		"""
-		remote_snapshot_path = s.remote_commit(REMOTE_SUBVOLUME).val
+		remote_snapshot_path = s.remote_commit(REMOTE_SUBVOL).val
 		local_snapshot_path = s.pull(remote_snapshot_path, SUBVOLUME).val
 		s.checkout_local(local_snapshot_path, SUBVOLUME)
 		_prerr(f'DONE, \n\tpulled {remote_snapshot_path} \n\tinto {SUBVOLUME}\n.')
@@ -581,11 +581,11 @@ class Bfg:
 		return Res(fn)
 
 
-	def commit_and_push(s, SUBVOLUME, REMOTE_SUBVOLUME, SNAPSHOT_TAG=None, SNAPSHOT_PATH=None, SNAPSHOT_NAME=None,
+	def commit_and_push(s, SUBVOLUME, REMOTE_SUBVOL, SNAPSHOT_TAG=None, SNAPSHOT_PATH=None, SNAPSHOT_NAME=None,
 						PARENT=None, CLONESRCS: List[str] = []):
 		"""commit, and transfer the snapshot into .bfg_snapshots on the other machine"""
 		snapshot = s.local_commit(SUBVOLUME, SNAPSHOT_TAG, SNAPSHOT_PATH, SNAPSHOT_NAME).val
-		return Res(s.push(SUBVOLUME, snapshot, REMOTE_SUBVOLUME, PARENT, CLONESRCS).val)
+		return Res(s.push(SUBVOLUME, snapshot, REMOTE_SUBVOL, PARENT, CLONESRCS).val)
 
 
 
@@ -856,7 +856,7 @@ class Bfg:
 
 
 
-	def remote_commit(s, REMOTE_SUBVOLUME, TAG=None, SNAPSHOT=None, SNAPSHOT_NAME=None):
+	def remote_commit(s, REMOTE_SUBVOL, TAG=None, SNAPSHOT=None, SNAPSHOT_NAME=None):
 		if TAG and SNAPSHOT:
 			_prerr(f'please specify SNAPSHOT or TAG, not both')
 			return -1
@@ -869,19 +869,19 @@ class Bfg:
 		if SNAPSHOT is not None:
 			SNAPSHOT = Path(SNAPSHOT).absolute()
 		else:
-			SNAPSHOT = s.calculate_default_snapshot_path('remote', Path(REMOTE_SUBVOLUME), 'remote_commit',
+			SNAPSHOT = s.calculate_default_snapshot_path('remote', Path(REMOTE_SUBVOL), 'remote_commit',
 														 SNAPSHOT_NAME).val
-		s._remote_make_ro_snapshot(REMOTE_SUBVOLUME, SNAPSHOT)
-		_prerr(f'DONE {s._remote_str},\n\tsnapshotted {REMOTE_SUBVOLUME} \n\tinto {SNAPSHOT}\n.')
+		s._remote_make_ro_snapshot(REMOTE_SUBVOL, SNAPSHOT)
+		_prerr(f'DONE {s._remote_str},\n\tsnapshotted {REMOTE_SUBVOL} \n\tinto {SNAPSHOT}\n.')
 		return Res(SNAPSHOT)
 
 
 
-	def push(s, SUBVOLUME, SNAPSHOT, REMOTE_SUBVOLUME, PARENT=None, CLONESRCS=[]):
+	def push(s, SUBVOLUME, SNAPSHOT, REMOTE_SUBVOL, PARENT=None, CLONESRCS=[]):
 		"""
 		Try to figure out shared parents, if not provided, and send SNAPSHOT to the other side.
 		"""
-		snapshot_parent_dir = s.calculate_default_snapshot_parent_dir('remote', Path(REMOTE_SUBVOLUME)).val
+		snapshot_parent_dir = s.calculate_default_snapshot_parent_dir('remote', Path(REMOTE_SUBVOL)).val
 		logbfg.info(f'mkdir -p {snapshot_parent_dir}')
 		s._remote_cmd(['mkdir', '-p', str(snapshot_parent_dir)])
 
@@ -924,21 +924,21 @@ class Bfg:
 	low-level operations
 	"""
 
-	def _local_make_ro_snapshot(s, SUBVOLUME, SNAPSHOT):
-		"""make a read-only snapshot of SUBVOLUME into SNAPSHOT, locally"""
+	def _local_make_ro_snapshot(s, SUBVOL, SNAPSHOT):
+		"""make a read-only snapshot of SUBVOL into SNAPSHOT, locally"""
 		SNAPSHOT_PARENT = os.path.split(Path(SNAPSHOT))[0]
 		s._local_cmd(f'mkdir -p {SNAPSHOT_PARENT}')
-		s._local_cmd(f'btrfs subvolume snapshot -r {SUBVOLUME} {SNAPSHOT}')
-		_prerr(f'DONE {s._local_str}, \n\tsnapshotted {SUBVOLUME} \n\tinto {SNAPSHOT}\n.')
+		s._local_cmd(f'btrfs subvolume snapshot -r {SUBVOL} {SNAPSHOT}')
+		_prerr(f'DONE {s._local_str}, \n\tsnapshotted {SUBVOL} \n\tinto {SNAPSHOT}\n.')
 		return SNAPSHOT
 
 
 
-	def _remote_make_ro_snapshot(s, SUBVOLUME, SNAPSHOT):
-		"""make a read-only snapshot of SUBVOLUME into SNAPSHOT, remotely"""
+	def _remote_make_ro_snapshot(s, SUBVOL, SNAPSHOT):
+		"""make a read-only snapshot of SUBVOL into SNAPSHOT, remotely"""
 		SNAPSHOT_PARENT = os.path.split(Path(SNAPSHOT))[0]
 		s._remote_cmd(f'mkdir -p {SNAPSHOT_PARENT}')
-		s._remote_cmd(f'btrfs subvolume snapshot -r {SUBVOLUME} {SNAPSHOT}')
+		s._remote_cmd(f'btrfs subvolume snapshot -r {SUBVOL} {SNAPSHOT}')
 		return SNAPSHOT
 
 
