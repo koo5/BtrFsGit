@@ -33,6 +33,8 @@ def datetime_to_json(o):
 	"""
 	if isinstance(o, datetime):
 		return o.isoformat()
+	elif isinstance(o, Path):
+		return str(o)
 	raise TypeError(f"Type {type(o)} not serializable")
 
 
@@ -109,8 +111,8 @@ class Bfg:
 		logbfg.debug(f'__init__...')
 
 		# in current implementation, this should only ever hold one value, for the local fs we're working with
-		s._local_fs_id5_mount_points = {}
-		s._remote_fs_id5_mount_points = {}
+		s._local_fs_id5_mount_point = {}
+		s._remote_fs_id5_mount_point = {}
 		s._local_fs_uuid = {}
 
 		s._yes_was_given_on_command_line = YES
@@ -183,15 +185,21 @@ class Bfg:
 	"""
 
 	def local_fs_id5_mount_point(self, subvolume):
-		if subvolume not in self._local_fs_id5_mount_points:
-			self._local_fs_id5_mount_points[subvolume] = self.find_local_fs_id5_mount_point(subvolume)
-		return self._local_fs_id5_mount_points[subvolume]
+		# if subvolume not in self._local_fs_id5_mount_points:
+		# 	self._local_fs_id5_mount_points[subvolume] = self.find_local_fs_id5_mount_point(subvolume)
+		# return self._local_fs_id5_mount_points[subvolume]
+		if self._local_fs_id5_mount_point == {}:
+			self._local_fs_id5_mount_point = self.find_local_fs_id5_mount_point(subvolume)
+		return self._local_fs_id5_mount_point
 
 
 	def remote_fs_id5_mount_point(self, subvolume):
-		if subvolume not in self._remote_fs_id5_mount_points:
-			self._remote_fs_id5_mount_points[subvolume] = self.find_remote_fs_id5_mount_point(subvolume)
-		return self._remote_fs_id5_mount_points[subvolume]
+		# if subvolume not in self._remote_fs_id5_mount_points:
+		# 	self._remote_fs_id5_mount_points[subvolume] = self.find_remote_fs_id5_mount_point(subvolume)
+		# return self._remote_fs_id5_mount_points[subvolume]
+		if self._remote_fs_id5_mount_point == {}:
+			self._remote_fs_id5_mount_point = self.find_remote_fs_id5_mount_point(subvolume)
+		return self._remote_fs_id5_mount_point
 
 
 	def find_local_fs_id5_mount_point(self, subvolume):
@@ -204,6 +212,7 @@ class Bfg:
 				new_dir = dir.parent
 				if new_dir == dir:
 					raise Exception(f'could not find id5 for local {subvolume}')
+				dir = new_dir
 
 
 	def find_remote_fs_id5_mount_point(self, subvolume):
@@ -215,6 +224,7 @@ class Bfg:
 			new_dir = dir.parent
 			if new_dir == dir:
 				raise Exception(f'could not find id5 for remote {subvolume}, id5 file missing?')
+			dir = new_dir
 
 
 
@@ -269,23 +279,27 @@ class Bfg:
 		snapshot['parent_uuid'] = parent_uuid
 		snapshot['local_uuid'] = local_uuid
 		snapshot['subvol_id'] = int(subvol_id)
-		snapshot['path'] = s.local_fs_id5_mount_point(items[6]) / items[6])
+		snapshot['path'] = s.local_fs_id5_mount_point(items[6]) / items[6]
 		logging.debug(snapshot)
 
 		return snapshot
 
 
 	def local_fs_uuid(self, subvol):
-		if subvol not in self._local_fs_uuid:
-			self._local_fs_uuid[subvol] = self.get_fs_uuid(subvol)
-		# check that all values are the same, because we should only be working with one local filesystem
-		if not all([x == self._local_fs_uuid[subvol] for x in self._local_fs_uuid.values()]):
-			raise Exception(f'weird, local_fs_uuids are not the same: {self._local_fs_uuid}')
-		return self._local_fs_uuid[subvol]
+		# if subvol not in self._local_fs_uuid:
+		# 	self._local_fs_uuid[subvol] = self.get_fs_uuid(subvol)
+		# # check that all values are the same, because we should only be working with one local filesystem
+		# if not all([x == self._local_fs_uuid[subvol] for x in self._local_fs_uuid.values()]):
+		# 	raise Exception(f'weird, local_fs_uuids are not the same: {self._local_fs_uuid}')
+		# return self._local_fs_uuid[subvol]
+		if self._local_fs_uuid == {}:
+			self._local_fs_uuid = self.get_fs_uuid(subvol)
+		return self._local_fs_uuid
 
 
 	def get_fs_uuid(s, subvol):
-		l = s._local_cmd(f'btrfs filesystem show ' + s.local_fs_id5_mount_point(subvol)).splitlines()[0]
+		logbfg.info(f'get_fs_uuid {subvol=}')
+		l = s._local_cmd(f'btrfs filesystem show ' + str(s.local_fs_id5_mount_point(subvol))).splitlines()[0]
 		r = r"Label:\s+'.*'\s+uuid:\s+([a-f0-9-]+)$"
 		fs_uuid = re.match(r, l).group(1)
 		logbfg.info(f'get_fs: {fs_uuid=}')
@@ -348,14 +362,13 @@ class Bfg:
 			logbfg.info(f'commit...')
 
 
-	def all_snapshots_from_db(s):
+	def all_subvols_from_db(s):
 		logbfg.info(f'all_snapshots_from_db...')
 		session = db.session()
 		with session.begin():
 			logbfg.info(f'got db session.')
 			logbfg.info(f'query all snapshots from db...')
 			all = list(session.query(db.Snapshot).options(undefer("*")).all())
-			logbfg.info(f'got {len(all)} snapshots from db.')
 
 			r = [{
 				column.name: getattr(x, column.name)
@@ -367,10 +380,12 @@ class Bfg:
 					x['dt'] = s.snapshot_dt(x)
 				x['src'] = 'db'
 
+			logbfg.info(f'got {len(r)} snapshots from db.')
 			return r
 
 
 	def remote_fs_uuids(s, all, subvol):
+		logbfg.info(f'remote_fs_uuids...')
 		fss = {}
 		for snap in all:
 			snap_fs_uuid = snap['fs_uuid']
@@ -750,7 +765,7 @@ class Bfg:
 		logbfg.info(f"Pruning snapshots for {SUBVOLUME=}")
 		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
 
-		all = s.all_snapshots_from_db()
+		all = s.all_subvols_from_db()
 
 		local_snapshots = s.local_bfg_snapshots(all, SUBVOLUME)
 		local_snapshots = sorted(local_snapshots, key=lambda x: x['dt'])
