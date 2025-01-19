@@ -3,33 +3,28 @@
 """
 BtrFsGit
 """
+
 import logging
-
-from sqlalchemy.orm import undefer
-
 from btrfsgit.bfg_logging import configure_logging
 configure_logging()
-
 logbtrfs = logging.getLogger('btrfs')
-logutils = logging.getLogger('utils')
 logbfg = logging.getLogger('bfg')
 
 
+from sqlalchemy.orm import undefer
 from pathlib import Path
 from pathvalidate import sanitize_filename
 import sys, os
 import time
 import subprocess
 import fire
-import shlex  # python 3.8 required (at least for shlex.join)
+import shlex  # python 3.8 required (for shlex.join)
 from typing import List, Optional
-from .utils import *
+from .volwalker import *
 from collections import defaultdict
 import re
 from datetime import datetime
 import btrfsgit.db as db
-
-
 
 
 def datetime_to_json(o):
@@ -37,6 +32,15 @@ def datetime_to_json(o):
         return o.isoformat()
     raise TypeError(f"Type {type(o)} not serializable")
 
+
+class Res:
+	"""helper class for passing results of Fire-invoked functions around and making sure they're printed understandably and machine-readably"""
+	def __init__(s, value):
+		s.val = value
+	def __repr__(s):
+		return json.dumps({'result':s.val})
+	def __str__(s):
+		return json.dumps({'result':s.val})
 
 
 def prompt(question, dry_run=False):
@@ -75,16 +79,18 @@ def prompt(question, dry_run=False):
 			else:
 				sys.stdout.write("Please respond with 'yes' or 'no' " "(or 'y' or 'n').\n")
 
+
 class Bfg:
 
-	def __init__(s, LOCAL_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=None, REMOTE_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT=None, sshstr='',
-				 YES=False):
+	def __init__(s, sshstr='', YES=False):
 
 		logbfg.debug(f'__init__...')
 
-		s._local_fs_id5_mount_point = LOCAL_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT
+		# in current implementation, this should only ever hold one value, for the local fs we're working with
+		s._local_fs_id5_mount_points = {}
+		s._remote_fs_id5_mount_points = {}
+		s._local_fs_uuid = {}
 
-		s._remote_fs_id5_mount_point = REMOTE_FS_TOP_LEVEL_SUBVOL_MOUNT_POINT
 		s._yes_was_given_on_command_line = YES
 		s._sshstr = sshstr
 		# s._shush_ssh_stderr = shush_ssh_stderr # todo  # , SHUSH_SSH_STDERR=True
@@ -95,7 +101,50 @@ class Bfg:
 		s._local_str = '(here)'
 		s._sudo = ['sudo']
 		s.host = subprocess.check_output(['hostname'], text=True).strip()
-		s._local_fs_uuid = s.get_fs()
+
+
+	def local_fs_id5_mount_point(self, subvolume):
+		if subvolume not in self._local_fs_id5_mount_points:
+			self._local_fs_id5_mount_points[subvolume] = self.find_local_fs_id5_mount_point(subvolume)
+		return self._local_fs_id5_mount_points[subvolume]
+
+
+	def remote_fs_id5_mount_point(self, subvolume):
+		if subvolume not in self._remote_fs_id5_mount_points:
+			self._remote_fs_id5_mount_points[subvolume] = self.find_remote_fs_id5_mount_point(subvolume)
+		return self._remote_fs_id5_mount_points[subvolume]
+
+
+	def find_local_fs_id5_mount_point(self, subvolume):
+		dir = Path(subvolume)
+		while True:
+			try:
+				with open(dir / 'id5', 'r') as f:
+					return Path(f.read().strip())
+			except FileNotFoundError:
+				new_dir = dir.parent
+				if new_dir == dir:
+					raise Exception(f'could not find id5 for local {subvolume}')
+
+
+	def find_remote_fs_id5_mount_point(self, subvolume):
+		dir = Path(subvolume)
+		while True:
+			r = s._remote_cmd(['cat', dir / 'id5'], die_on_error=False)
+			if r != -1:
+				return Path(r.strip())
+			new_dir = dir.parent
+			if new_dir == dir:
+				raise Exception(f'could not find id5 for remote {subvolume}, id5 file missing?')
+
+
+	def local_fs_uuid(self, subvol):
+		if subvol not in self._local_fs_uuid:
+			self._local_fs_uuid[subvol] = self.get_fs_uuid(subvol)
+		# check that all values are the same, because we should only be working with one local filesystem
+		if not all([x == self._local_fs_uuid[subvol] for x in self._local_fs_uuid.values()]):
+			raise Exception(f'weird, local_fs_uuids are not the same: {self._local_fs_uuid}')
+		return self._local_fs_uuid[subvol]
 
 
 	def _yes(s, msg, dry_run=False):
@@ -219,8 +268,8 @@ class Bfg:
 		return res
 
 
-	def get_fs(s):
-		l = s._local_cmd(f'btrfs filesystem show ' + s._local_fs_id5_mount_point).splitlines()[0]
+	def get_fs_uuid(s, subvol):
+		l = s._local_cmd(f'btrfs filesystem show ' + s.local_fs_id5_mount_point(subvol)).splitlines()[0]
 		r = r"Label:\s+'.*'\s+uuid:\s+([a-f0-9-]+)$"
 		fs_uuid = re.match(r, l).group(1)
 		logbfg.info(f'get_fs: {fs_uuid=}')
@@ -252,14 +301,10 @@ class Bfg:
 	def commit_and_push_and_checkout(s, SUBVOLUME, REMOTE_SUBVOLUME, PARENT: str = None):
 		"""
 		Snapshot your data, "btrfs send"/"btrfs receive" the snapshot to the other machine, and checkout it there
-
-		:param FS_ROOT_MOUNT_POINT: mount point of SUBVOLUME filesystem
 		:param SUBVOLUME: your data
 		:param REMOTE_SUBVOLUME: desired filesystem path of your data on the other machine
 		:return: filesystem path of the snapshot created on the other machine
 		"""
-		# todo: subvolume could default to s._local_fs_id5_mount_point
-
 		remote_snapshot_path = s.commit_and_push(SUBVOLUME, REMOTE_SUBVOLUME, PARENT=PARENT).val
 		s.checkout_remote(remote_snapshot_path, REMOTE_SUBVOLUME)
 		return Res(REMOTE_SUBVOLUME)
@@ -328,7 +373,7 @@ class Bfg:
 		result = []
 		for snapshot in local_snapshots:
 			logger.debug(f'{snapshot=}')
-			if '.bfg_snapshots' in Path(snapshot['path']).parts:
+			if '.bfg_snapshots' in snapshot['path'].parts:
 				logger.debug(f'YES')
 				result.append(snapshot)
 				snapshot['dt'] = s.snapshot_dt(snapshot)
@@ -339,7 +384,7 @@ class Bfg:
 
 	def snapshot_dt(s, snapshot):
 
-		dname = snapshot['path'].split('/')[-1]
+		dname = snapshot['path'].name
 		# Typical pattern might be:
 		#   <subvol>_bfg_snapshots_<timestamp>_<tag>
 		#   <subvol>_<timestamp>_<tag>
@@ -376,11 +421,11 @@ class Bfg:
 		return Res(snapshots)
 
 
-	def get_all_subvols_on_filesystem(s):
+	def get_all_subvols_on_filesystem(s, subvol):
 		"""list all subvolumes on the filesystem"""
 		logbfg.info	(f'get_all_subvols_on_filesystem...')
 		logger = logging.getLogger('get_all_subvols_on_filesystem')
-		subvols = s._get_subvolumes(s._local_cmd, s._local_fs_id5_mount_point, 'local')
+		subvols = s._get_subvolumes(s._local_cmd, s.local_fs_id5_mount_point(subvol), 'local')
 		logger.debug(f'{subvols=}')
 
 		snapshots = []
@@ -395,21 +440,18 @@ class Bfg:
 
 
 
-	def update_db_with_local_bfg_snapshots(s):
+	def update_db(s, FS):
 		"""
-		blast the db with all the bfg snapshots we can find on the filesystem.
-		update the global database:
-			walk the snapshots and insert missing snapshots into db
-			walk the table and mark missing snapshots as deleted in db
+		blast the db with all the subvols we can find on the filesystem.
 		"""
-		snapshots = s.get_all_subvols_on_filesystem().val
+		snapshots = s.get_all_subvols_on_filesystem(FS).val
 		logbfg.info(f'db.session()...')
 		session = db.session()
 		with session.begin():
 			logbfg.info(f'got db session...')
 
-			logbfg.info(f'purge db of all snapshots with fs_uuid={s._local_fs_uuid}...')
-			session.query(db.Snapshot).filter(db.Snapshot.fs_uuid == s._local_fs_uuid).delete()
+			logbfg.info(f'purge db of all snapshots with fs_uuid={s.local_fs_uuid(FS)}...')
+			session.query(db.Snapshot).filter(db.Snapshot.fs_uuid == s.local_fs_uuid(FS)).delete()
 
 			logbfg.info(f'insert snapshots into db...')
 			for i,snapshot in enumerate(snapshots):
@@ -422,7 +464,7 @@ class Bfg:
 					parent_uuid=snapshot['parent_uuid'],
 					received_uuid=snapshot['received_uuid'],
 					host=snapshot['host'],
-					fs=s._local_fs_id5_mount_point,
+					fs=FS,
 					path=snapshot['path'],
 					fs_uuid=snapshot['fs_uuid'],
 					subvol_id=snapshot['subvol_id'],
@@ -448,7 +490,8 @@ class Bfg:
 				for column in x.__table__.columns} for x in all]
 
 			for x in r:
-				if '.bfg_snapshots' in Path(x['path']).parts:
+				x['path'] = Path(x['path'])
+				if '.bfg_snapshots' in x['path'].parts:
 					x['dt'] = self.snapshot_dt(x)
 				x['src'] = 'db'
 
@@ -617,26 +660,29 @@ class Bfg:
 		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
 
 		all = s.all_snapshots_from_db()
+
 		local_snapshots = s.local_bfg_snapshots(all, SUBVOLUME)
 		local_snapshots = sorted(local_snapshots, key=lambda x: x['dt'])
 		if len(local_snapshots) == 0:
 			logbfg.info(f"No snapshots found for {SUBVOLUME}")
 			return
-		newest = Path(local_snapshots[-1]['path'])
-		buckets = s.put_snapshots_into_buckets(local_snapshots)
-		mrcs = set([Path(x['path']) for x in s.most_recent_common_snapshots(all, SUBVOLUME)])
+
+		newest = local_snapshots[-1]['path']
+
+		mrcs = set([x['path'] for x in s.most_recent_common_snapshots(all, SUBVOLUME)])
 		logbfg.info(f"{mrcs=}")
+
+		buckets = s.put_snapshots_into_buckets(local_snapshots)
 
 		for bucket, snaplist in buckets.items():
 			logbfg.info(f"Bucket: {bucket}")
 
 			for i,snap in enumerate(snaplist):
-				path = Path(snap['path'])
+				path = snap['path']
 
 				is_newest = path == newest
 				is_mrc = path in mrcs
 				is_last = i == len(snaplist) - 1
-				#logbfg.info(f"{path} {is_newest=} {is_mrc=} {is_last=}, {i=}/{len(snaplist)}")
 				is_prunable = not is_newest and not is_mrc and not is_last
 
 				flags = ''
@@ -649,6 +695,10 @@ class Bfg:
 				if is_prunable:
 					flags += ' (prunable)'
 				logbfg.info(f"  {path}{flags}")
+
+				if is_mrc:
+					logbfg.info(f"this is the most recent common snapshot as calculated from db, stopping here.")
+					return
 
 				if is_prunable and not DRY_RUN:
 					cmd = ['btrfs', 'subvolume', 'delete', str(path)]
@@ -665,7 +715,7 @@ class Bfg:
 		result = []
 
 		for snap in all:
-			if snap['parent_uuid'] == s._subvol_uuid and not snap['deleted'] and '.bfg_snapshots' in Path(snap['path']).parts:
+			if snap['parent_uuid'] == s._subvol_uuid and not snap['deleted'] and '.bfg_snapshots' in snap['path'].parts:
 				result.append(snap)
 
 		return result
@@ -680,7 +730,7 @@ class Bfg:
 		result = []
 
 		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
-		fss = s.remote_fs_uuids(all)
+		fss = s.remote_fs_uuids(all, SUBVOLUME)
 		logbfg.info(f"{fss=}")
 
 		for fs_uuid, fs in fss.items():
@@ -691,7 +741,7 @@ class Bfg:
 			all2 = []
 			for snap in all:
 				x = dict(snap)
-				if x['fs_uuid'] == s._local_fs_uuid:
+				if x['fs_uuid'] == s.local_fs_uuid(SUBVOLUME):
 					x['machine'] = 'local'
 				elif x['fs_uuid'] == fs_uuid:
 					x['machine'] = 'remote'
@@ -716,14 +766,14 @@ class Bfg:
 
 
 
-	def remote_fs_uuids(s, all):
+	def remote_fs_uuids(s, all, subvol):
 		fss = {}
 		for snap in all:
 			snap_fs_uuid = snap['fs_uuid']
 			if snap_fs_uuid not in fss:
 				fss[snap_fs_uuid] = {'hosts': set()}
 			fss[snap_fs_uuid]['hosts'].add(snap['host'])
-		del fss[s._local_fs_uuid]
+		del fss[s.local_fs_uuid(subvol)]
 		return fss
 
 
@@ -797,7 +847,7 @@ class Bfg:
 
 	def _local_make_ro_snapshot(s, SUBVOLUME, SNAPSHOT):
 		"""make a read-only snapshot of SUBVOLUME into SNAPSHOT, locally"""
-		SNAPSHOT_PARENT = os.path.split((SNAPSHOT))[0]
+		SNAPSHOT_PARENT = os.path.split(Path(SNAPSHOT))[0]
 		s._local_cmd(f'mkdir -p {SNAPSHOT_PARENT}')
 		s._local_cmd(f'btrfs subvolume snapshot -r {SUBVOLUME} {SNAPSHOT}')
 		_prerr(f'DONE {s._local_str}, \n\tsnapshotted {SUBVOLUME} \n\tinto {SNAPSHOT}\n.')
@@ -807,7 +857,7 @@ class Bfg:
 
 	def _remote_make_ro_snapshot(s, SUBVOLUME, SNAPSHOT):
 		"""make a read-only snapshot of SUBVOLUME into SNAPSHOT, remotely"""
-		SNAPSHOT_PARENT = os.path.split((SNAPSHOT))[0]
+		SNAPSHOT_PARENT = os.path.split(Path(SNAPSHOT))[0]
 		s._remote_cmd(f'mkdir -p {SNAPSHOT_PARENT}')
 		s._remote_cmd(f'btrfs subvolume snapshot -r {SUBVOLUME} {SNAPSHOT}')
 		return SNAPSHOT
@@ -882,30 +932,16 @@ class Bfg:
 
 
 	def _local_add_abspath(s, subvol_record):
-		if s._local_fs_id5_mount_point is None:
-			s._local_fs_id5_mount_point = prompt(
-				{
-					'type': 'input',
-					'name': 'path',
-					'message': "where did you mount the top level subvolume (ID 5, not your /@ root)? Yes this is silly but i really need to know."
-				}
-			)['path']
-		subvol_record['abspath'] = s._local_fs_id5_mount_point + '/' + s._local_cmd(
-			['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), s._local_fs_id5_mount_point]).strip()
+		id5_mp = s.local_fs_id5_mount_point(subvol_record['path'])
+		subvol_record['abspath'] = id5_mp + '/' + s._local_cmd(
+			['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), id5_mp]).strip()
 
 
 
 	def _remote_add_abspath(s, subvol_record):
-		if s._remote_fs_id5_mount_point is None:
-			s._remote_fs_id5_mount_point = prompt(
-				{
-					'type': 'input',
-					'name': 'path',
-					'message': "where did you mount the top level subvolume (ID 5, not your /@ root) on the remote machine? Yes this is silly but i really need to know."
-				}
-			)['path']
-		subvol_record['abspath'] = s._remote_fs_id5_mount_point + '/' + s._remote_cmd(
-			['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), s._remote_fs_id5_mount_point]).strip()
+		id5_mp = s.remote_fs_id5_mount_point(subvol_record['path'])
+		subvol_record['abspath'] = id5_mp + '/' + s._remote_cmd(
+			['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), id5_mp]).strip()
 
 
 
@@ -992,11 +1028,11 @@ class Bfg:
 		# _prerr(str(ro_subvols))
 
 		for i in subvols:
-			ro = i['local_uuid'] in ro_subvols
-			i['ro'] = ro
-			i['host'] = s.host
-			i['fs_uuid'] = s._local_fs_uuid
-		# _prerr(str(i))
+			i['ro'] = i['local_uuid'] in ro_subvols
+			# we should not need this for remote subvolumes:
+			if src == 'local':
+				i['host'] = s.host
+				i['fs_uuid'] = s.local_fs_uuid(subvolume)
 
 		subvols.sort(key=lambda sv: -sv['subvol_id'])
 		logbtrfs.debug(f'_get_subvolumes: {len(subvols)=}')
@@ -1017,7 +1053,7 @@ class Bfg:
 		snapshot['parent_uuid'] = parent_uuid
 		snapshot['local_uuid'] = local_uuid
 		snapshot['subvol_id'] = int(subvol_id)
-		snapshot['path'] = str(Path(s._local_fs_id5_mount_point +'/'+items[6]))
+		snapshot['path'] = s.local_fs_id5_mount_point(items[6]) / items[6])
 		logging.debug(snapshot)
 
 		return snapshot
