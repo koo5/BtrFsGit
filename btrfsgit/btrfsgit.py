@@ -442,7 +442,7 @@ class Bfg:
 		return grouped
 
 
-	def _figure_out_snapshot_name(s, SUBVOLUME, TAG, SNAPSHOT, SNAPSHOT_NAME):
+	def _figure_out_snapshot_name(s, SUBVOL, TAG, SNAPSHOT, SNAPSHOT_NAME):
 		if TAG and SNAPSHOT:
 			_prerr(f'please specify SNAPSHOT or TAG, not both')
 			sys.exit(-1)
@@ -456,7 +456,7 @@ class Bfg:
 		if SNAPSHOT is not None:
 			SNAPSHOT = Path(SNAPSHOT).absolute()
 		else:
-			SNAPSHOT = s.calculate_default_snapshot_path('local', SUBVOLUME, TAG, SNAPSHOT_NAME).val
+			SNAPSHOT = s.calculate_default_snapshot_path('local', SUBVOL, TAG, SNAPSHOT_NAME).val
 		return SNAPSHOT
 
 
@@ -475,57 +475,57 @@ class Bfg:
 		return datetime.strptime(m.group(2), "%Y-%m-%d_%H-%M-%S")
 
 
-	def calculate_default_snapshot_parent_dir(s, machine: str, SUBVOLUME):
+	def calculate_default_snapshot_parent_dir(s, machine: str, SUBVOL):
 		"""
 		fixme: in fact calculates also the base of the actual directory name now.
 
-		SUBVOLUME: your subvolume (for example /data).
+		SUBVOL: your subvolume (for example /data).
 		Calculate the default snapshot parent dir. In the filesystem tree, it is on the same level as your subvolume, for example `/.bfg_snapshots.data`, if that is still the same filesystem.
 		"""
-		SUBVOLUME = Path(SUBVOLUME)
-		parent = SUBVOLUME.parent
+		SUBVOL = Path(SUBVOL)
+		parent = SUBVOL.parent
 
 		logger = logging.getLogger('calculate_default_snapshot_parent_dir')
 
-		logger.debug(f'calculate_default_snapshot_parent_dir for {SUBVOLUME=}')
+		logger.debug(f'calculate_default_snapshot_parent_dir for {SUBVOL=}')
 
-		# is parent the same filesystem as SUBVOLUME? if not, then SUBVOLUME is the top level subvolume, and we need to make the snapshot inside it, rather than outside.
+		# is parent the same filesystem as SUBVOL? if not, then SUBVOL is the top level subvolume, and we need to make the snapshot inside it, rather than outside.
 
 		if machine == 'local':
 			runner = s._local_cmd
 		else:
 			runner = s._remote_cmd
 
-		if runner(['test', '-e', str(SUBVOLUME)], die_on_error=False, logger=logger) == -1:
+		if runner(['test', '-e', str(SUBVOL)], die_on_error=False, logger=logger) == -1:
 			# we assume that if the target filesystem is mounted. This implies that if we're transferring the root subvol, the directory exists. This is the only case where the snapshot parent dir will be inside the subvol, rather than outside. Therefore, if the destination does not exist (as a directory or subvolume), it is safe to assume that it is not the root subvolume.
 			snapshot_parent_dir = parent
 		else:
 
-			runner(['mkdir', '-p', str(SUBVOLUME)], logger=logger)
+			runner(['mkdir', '-p', str(SUBVOL)], logger=logger)
 
 			# hope to come up with a unique file names:
 			f1 = str(time.time())
 			f2 = f1 + "_dest"
-			runner(['touch', str(SUBVOLUME / f1)], logger=logger)
+			runner(['touch', str(SUBVOL / f1)], logger=logger)
 
-			if runner(['cp', '--reflink', SUBVOLUME / f1, parent / f2], die_on_error=False, logger=logger) != -1:
+			if runner(['cp', '--reflink', SUBVOL / f1, parent / f2], die_on_error=False, logger=logger) != -1:
 				snapshot_parent_dir = parent
 			else:
 				_prerr(
-					f'cp --reflink failed, this means that {parent} is not the same filesystem, going to make snapshot inside {SUBVOLUME} instead of {parent}')
-				snapshot_parent_dir = SUBVOLUME
+					f'cp --reflink failed, this means that {parent} is not the same filesystem, going to make snapshot inside {SUBVOL} instead of {parent}')
+				snapshot_parent_dir = SUBVOL
 
 		r = str(Path(
-			str(snapshot_parent_dir) + '/.bfg_snapshots/' + Path(SUBVOLUME).parts[-1]).absolute())
-		logging.getLogger('utils').info(f'calculate_default_snapshot_parent_dir: {SUBVOLUME=} -> {r=}')
+			str(snapshot_parent_dir) + '/.bfg_snapshots/' + Path(SUBVOL).parts[-1]).absolute())
+		logging.getLogger('utils').info(f'calculate_default_snapshot_parent_dir: {SUBVOL=} -> {r=}')
 		return Res(r)
 
 
-	def calculate_default_snapshot_path(s, machine, SUBVOLUME, TAG, NAME_OVERRIDE=None):  # , TAG2):
+	def calculate_default_snapshot_path(s, machine, SUBVOL, TAG, NAME_OVERRIDE=None):  # , TAG2):
 		"""
 		calculate the filesystem path where a snapshot should go, given a subvolume and a tag
 		"""
-		parent = s.calculate_default_snapshot_parent_dir(machine, SUBVOLUME).val
+		parent = s.calculate_default_snapshot_parent_dir(machine, SUBVOL).val
 
 		if NAME_OVERRIDE is not None:
 			name = NAME_OVERRIDE
@@ -550,44 +550,44 @@ class Bfg:
 
 	"""
 
-	def commit_and_push_and_checkout(s, SUBVOLUME, REMOTE_SUBVOL, PARENT: str = None):
+	def commit_and_push_and_checkout(s, SUBVOL, REMOTE_SUBVOL, PARENT: str = None):
 		"""
 		Snapshot your data, "btrfs send"/"btrfs receive" the snapshot to the other machine, and checkout it there
-		:param SUBVOLUME: your data
+		:param SUBVOL: your data
 		:param REMOTE_SUBVOL: desired filesystem path of your data on the other machine
 		:return: filesystem path of the snapshot created on the other machine
 		"""
-		remote_snapshot_path = s.commit_and_push(SUBVOLUME, REMOTE_SUBVOL, PARENT=PARENT).val
+		remote_snapshot_path = s.commit_and_push(SUBVOL, REMOTE_SUBVOL, PARENT=PARENT).val
 		s.checkout_remote(remote_snapshot_path, REMOTE_SUBVOL)
 		return Res(REMOTE_SUBVOL)
 
 
-	def remote_commit_and_pull(s, REMOTE_SUBVOL, SUBVOLUME):
+	def remote_commit_and_pull(s, REMOTE_SUBVOL, SUBVOL):
 		"""
 		same as commit_and_push_and_checkout but going the other direction
 
 		:param FS_ROOT_MOUNT_POINT:
 		:param REMOTE_SUBVOL:
-		:param SUBVOLUME:
+		:param SUBVOL:
 		:return:
 		"""
 		remote_snapshot_path = s.remote_commit(REMOTE_SUBVOL).val
-		local_snapshot_path = s.pull(remote_snapshot_path, SUBVOLUME).val
-		s.checkout_local(local_snapshot_path, SUBVOLUME)
-		_prerr(f'DONE, \n\tpulled {remote_snapshot_path} \n\tinto {SUBVOLUME}\n.')
-		return Res(SUBVOLUME)
+		local_snapshot_path = s.pull(remote_snapshot_path, SUBVOL).val
+		s.checkout_local(local_snapshot_path, SUBVOL)
+		_prerr(f'DONE, \n\tpulled {remote_snapshot_path} \n\tinto {SUBVOL}\n.')
+		return Res(SUBVOL)
 
 
-	def commit_and_generate_patch(s, SUBVOLUME='/', PATCH_FILE_DIR='/', PARENT: Optional[str]=None):
+	def commit_and_generate_patch(s, SUBVOL='/', PATCH_FILE_DIR='/', PARENT: Optional[str]=None):
 		"""
 		store a `btrfs send` stream locally
 
-		:param SUBVOLUME:
+		:param SUBVOL:
 		:param PATCH_FILE_DIR:
 		:param PARENTS:
 		:return:
 		"""
-		snapshot = s.local_commit(SUBVOLUME).val
+		snapshot = s.local_commit(SUBVOL).val
 		# print(Path(snapshot).parts[-2:])
 		fn = PATCH_FILE_DIR + '/' + '__'.join(Path(snapshot).parts[-2:])
 		# print(fn)
@@ -596,11 +596,11 @@ class Bfg:
 		return Res(fn)
 
 
-	def commit_and_push(s, SUBVOLUME, REMOTE_SUBVOL, SNAPSHOT_TAG=None, SNAPSHOT_PATH=None, SNAPSHOT_NAME=None,
+	def commit_and_push(s, SUBVOL, REMOTE_SUBVOL, SNAPSHOT_TAG=None, SNAPSHOT_PATH=None, SNAPSHOT_NAME=None,
 						PARENT=None, CLONESRCS: List[str] = []):
 		"""commit, and transfer the snapshot into .bfg_snapshots on the other machine"""
-		snapshot = s.local_commit(SUBVOLUME, SNAPSHOT_TAG, SNAPSHOT_PATH, SNAPSHOT_NAME).val
-		return Res(s.push(SUBVOLUME, snapshot, REMOTE_SUBVOL, PARENT, CLONESRCS).val)
+		snapshot = s.local_commit(SUBVOL, SNAPSHOT_TAG, SNAPSHOT_PATH, SNAPSHOT_NAME).val
+		return Res(s.push(SUBVOL, snapshot, REMOTE_SUBVOL, PARENT, CLONESRCS).val)
 
 
 
@@ -610,11 +610,11 @@ class Bfg:
 
 
 
-	def get_local_bfg_snapshots(s, SUBVOLUME):
+	def get_local_bfg_snapshots(s, SUBVOL):
 		"""list snapshots in .bfg_snapshots"""
 		logger = logging.getLogger('get_local_bfg_snapshots')
 		logger.debug('get_local_bfg_snapshots...')
-		local_snapshots = s.get_local_snapshots(SUBVOLUME).val
+		local_snapshots = s.get_local_snapshots(SUBVOL).val
 		result = []
 		for snapshot in local_snapshots:
 			logger.debug(f'{snapshot=}')
@@ -626,12 +626,12 @@ class Bfg:
 		return Res(result)
 
 
-	def get_local_snapshots(s, SUBVOLUME):
-		"""list snapshots of SUBVOLUME on the local machine, that is, all read-only subvolumes on the filesystem, that are children of SUBVOLUME"""
+	def get_local_snapshots(s, SUBVOL):
+		"""list snapshots of SUBVOL on the local machine, that is, all read-only subvolumes on the filesystem, that are children of SUBVOL"""
 		logbtrfs.debug(f'get_local_snapshots...')
 		logger = logging.getLogger('get_local_snapshots')
-		uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
-		subvols = s._get_subvolumes(s._local_cmd, SUBVOLUME)
+		uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
+		subvols = s._get_subvolumes(s._local_cmd, SUBVOL)
 		logger.debug(f'{subvols=}')
 
 		snapshots = []
@@ -666,91 +666,91 @@ class Bfg:
 
 
 
-	def get_local_subvolumes(s, SUBVOLUME):
+	def get_local_subvolumes(s, SUBVOL):
 		"""list subvolumes on the local machine"""
-		return Res(s._get_subvolumes(s._local_cmd, SUBVOLUME))
+		return Res(s._get_subvolumes(s._local_cmd, SUBVOL))
 
 
 
-	def checkout_local(s, SNAPSHOT, SUBVOLUME):
-		"""stash your SUBVOLUME, and replace it with SNAPSHOT"""
-		s.stash_local(SUBVOLUME)
-		s._local_cmd(f'btrfs subvolume snapshot {SNAPSHOT} {SUBVOLUME}')
-		_prerr(f'DONE {s._local_str}, \n\tchecked out {SNAPSHOT} \n\tinto {SUBVOLUME}\n.')
-		return Res(SUBVOLUME)
+	def checkout_local(s, SNAPSHOT, SUBVOL):
+		"""stash your SUBVOL, and replace it with SNAPSHOT"""
+		s.stash_local(SUBVOL)
+		s._local_cmd(f'btrfs subvolume snapshot {SNAPSHOT} {SUBVOL}')
+		_prerr(f'DONE {s._local_str}, \n\tchecked out {SNAPSHOT} \n\tinto {SUBVOL}\n.')
+		return Res(SUBVOL)
 
 
 
-	def checkout_remote(s, SNAPSHOT, SUBVOLUME):
+	def checkout_remote(s, SNAPSHOT, SUBVOL):
 		"""ssh into the other machine,
-		stash your SUBVOLUME, and replace it with SNAPSHOT"""
-		s.stash_remote(SUBVOLUME)
-		s._remote_cmd(f'btrfs subvolume snapshot {SNAPSHOT} {SUBVOLUME}')
-		_prerr(f'DONE {s._remote_str}, \n\tchecked out {SNAPSHOT} \n\tinto {SUBVOLUME}\n.')
-		return Res(SUBVOLUME)
+		stash your SUBVOL, and replace it with SNAPSHOT"""
+		s.stash_remote(SUBVOL)
+		s._remote_cmd(f'btrfs subvolume snapshot {SNAPSHOT} {SUBVOL}')
+		_prerr(f'DONE {s._remote_str}, \n\tchecked out {SNAPSHOT} \n\tinto {SUBVOL}\n.')
+		return Res(SUBVOL)
 
 
 
-	def stash_local(s, SUBVOLUME, SNAPSHOT_TAG='stash', SNAPSHOT_NAME=None):
+	def stash_local(s, SUBVOL, SNAPSHOT_TAG='stash', SNAPSHOT_NAME=None):
 		"""
-		snapshot and delete your SUBVOLUME
+		snapshot and delete your SUBVOL
 
 		todo: maybe an alternative way should be to just move it?
 		"""
-		if s._local_cmd(['ls', SUBVOLUME], die_on_error=False) == -1:
-			_prerr(f'nothing to stash {s._local_str}, {SUBVOLUME} doesn\'t exist.')
+		if s._local_cmd(['ls', SUBVOL], die_on_error=False) == -1:
+			_prerr(f'nothing to stash {s._local_str}, {SUBVOL} doesn\'t exist.')
 			return None
 		else:
-			snapshot = s._local_make_ro_snapshot(SUBVOLUME,
-												 s.calculate_default_snapshot_path('local', SUBVOLUME, SNAPSHOT_TAG,
+			snapshot = s._local_make_ro_snapshot(SUBVOL,
+												 s.calculate_default_snapshot_path('local', SUBVOL, SNAPSHOT_TAG,
 																				   SNAPSHOT_NAME).val)
 
-			cmd = f'btrfs subvolume delete {SUBVOLUME}'
+			cmd = f'btrfs subvolume delete {SUBVOL}'
 			if not s._yes(cmd):
 				exit(1)
 			s._local_cmd(cmd)
-			_prerr(f'DONE {s._local_str}, \n\tsnapshotted {SUBVOLUME} into \n\t{snapshot}\n, and deleted it.')
+			_prerr(f'DONE {s._local_str}, \n\tsnapshotted {SUBVOL} into \n\t{snapshot}\n, and deleted it.')
 			return Res(snapshot)
 
 
 
-	def stash_remote(s, SUBVOLUME):
-		"""snapshot and delete your SUBVOLUME"""
-		if s._remote_cmd(['test', '-e', SUBVOLUME], die_on_error=False) == -1:
-			_prerr(f'nothing to stash {s._remote_str}, {SUBVOLUME} doesn\'t exist.')
+	def stash_remote(s, SUBVOL):
+		"""snapshot and delete your SUBVOL"""
+		if s._remote_cmd(['test', '-e', SUBVOL], die_on_error=False) == -1:
+			_prerr(f'nothing to stash {s._remote_str}, {SUBVOL} doesn\'t exist.')
 			return None
 		else:
-			_prerr(f'gonna stash {s._remote_str}, {SUBVOLUME}.')
-			snapshot = s._remote_make_ro_snapshot(SUBVOLUME,
-												  s.calculate_default_snapshot_path('remote', Path(SUBVOLUME),
+			_prerr(f'gonna stash {s._remote_str}, {SUBVOL}.')
+			snapshot = s._remote_make_ro_snapshot(SUBVOL,
+												  s.calculate_default_snapshot_path('remote', Path(SUBVOL),
 																					'stash_before_remote_checkout').val)
 
-			cmd = f'btrfs subvolume delete {SUBVOLUME}'
+			cmd = f'btrfs subvolume delete {SUBVOL}'
 			if not s._yes(cmd):
 				exit(1)
 			s._remote_cmd(cmd)
 
-			_prerr(f'DONE {s._remote_str}, \n\tsnapshotted {SUBVOLUME} \n\tinto {snapshot}\n, and deleted it.')
+			_prerr(f'DONE {s._remote_str}, \n\tsnapshotted {SUBVOL} \n\tinto {snapshot}\n, and deleted it.')
 			return Res(snapshot)
 
 
-	def local_commit(s, SUBVOLUME='/', TAG=None, SNAPSHOT=None, SNAPSHOT_NAME=None):
+	def local_commit(s, SUBVOL='/', TAG=None, SNAPSHOT=None, SNAPSHOT_NAME=None):
 		"""
-		come up with a filesystem path for a snapshot, and snapshot SUBVOLUME.
+		come up with a filesystem path for a snapshot, and snapshot SUBVOL.
 		:param SNAPSHOT: override default filesystem path where snapshot will be created
 		:param TAG: override the tag for the default SNAPSHOT (hostname by default)
 		"""
-		SUBVOLUME = Path(SUBVOLUME).absolute()
-		SNAPSHOT = s._figure_out_snapshot_name(SUBVOLUME, TAG, SNAPSHOT, SNAPSHOT_NAME)
-		s._local_make_ro_snapshot(SUBVOLUME, SNAPSHOT)
+		SUBVOL = Path(SUBVOL).absolute()
+		SNAPSHOT = s._figure_out_snapshot_name(SUBVOL, TAG, SNAPSHOT, SNAPSHOT_NAME)
+		s._local_make_ro_snapshot(SUBVOL, SNAPSHOT)
 		return Res(SNAPSHOT)
 
 
 
 
-	def prune(s, SUBVOLUME, CHECK_WITH_DB=True, DRY_RUN=False):
+	def prune(s, SUBVOL, CHECK_WITH_DB=True, DRY_RUN=False):
 		"""
-		Prune old snapshots under SUBVOLUME according to a time-based retention policy.
+		Prune old snapshots under SUBVOL according to a time-based retention policy.
 
 		1) Keep the oldest snapshot.
 		2) Keep the newest snapshot.
@@ -762,20 +762,20 @@ class Bfg:
 		8) Delete everything else.
 		"""
 
-		logbfg.info(f"Pruning snapshots for {SUBVOLUME=}")
-		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
+		logbfg.info(f"Pruning snapshots for {SUBVOL=}")
+		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
 
 		all = s.all_subvols_from_db()
 
-		local_snapshots = s.local_bfg_snapshots(all, SUBVOLUME)
+		local_snapshots = s.local_bfg_snapshots(all, SUBVOL)
 		local_snapshots = sorted(local_snapshots, key=lambda x: x['dt'])
 		if len(local_snapshots) == 0:
-			logbfg.info(f"No snapshots found for {SUBVOLUME}")
+			logbfg.info(f"No snapshots found for {SUBVOL}")
 			return
 
 		newest = local_snapshots[-1]['path']
 
-		mrcs = set([x['path'] for x in s.most_recent_common_snapshots(all, SUBVOLUME)])
+		mrcs = set([x['path'] for x in s.most_recent_common_snapshots(all, SUBVOL)])
 		logbfg.info(f"{mrcs=}")
 
 		buckets = s.put_snapshots_into_buckets(local_snapshots)
@@ -817,7 +817,7 @@ class Bfg:
 
 
 
-	def local_bfg_snapshots(s, all, SUBVOLUME):
+	def local_bfg_snapshots(s, all, SUBVOL):
 		result = []
 
 		for snap in all:
@@ -828,14 +828,14 @@ class Bfg:
 
 
 
-	def most_recent_common_snapshots(s, all, SUBVOLUME):
+	def most_recent_common_snapshots(s, all, SUBVOL):
 		"""
 		Find the most recent common snapshots between the local and each remote filesystem.
 		"""
 		result = []
 
-		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
-		fss = s.remote_fs_uuids(all, SUBVOLUME)
+		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
+		fss = s.remote_fs_uuids(all, SUBVOL)
 		logbfg.info(f"{fss=}")
 
 		for fs_uuid, fs in fss.items():
@@ -846,7 +846,7 @@ class Bfg:
 			all2 = []
 			for snap in all:
 				x = dict(snap)
-				if x['fs_uuid'] == s.local_fs_uuid(SUBVOLUME):
+				if x['fs_uuid'] == s.local_fs_uuid(SUBVOL):
 					x['machine'] = 'local'
 				elif x['fs_uuid'] == fs_uuid:
 					x['machine'] = 'remote'
@@ -892,7 +892,7 @@ class Bfg:
 
 
 
-	def push(s, SUBVOLUME, SNAPSHOT, REMOTE_SUBVOL, PARENT=None, CLONESRCS=[]):
+	def push(s, SUBVOL, SNAPSHOT, REMOTE_SUBVOL, PARENT=None, CLONESRCS=[]):
 		"""
 		Try to figure out shared parents, if not provided, and send SNAPSHOT to the other side.
 		"""
@@ -902,9 +902,9 @@ class Bfg:
 
 		if PARENT is None:
 			logbfg.info(f'get_subvol...')
-			my_uuid = s.get_subvol(s._local_cmd, SUBVOLUME).val['local_uuid']
+			my_uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
 			logbfg.info(f'find_common_parent...')
-			PARENT = s.find_common_parent(SUBVOLUME, str(snapshot_parent_dir), my_uuid, ('local', 'remote')).val
+			PARENT = s.find_common_parent(SUBVOL, str(snapshot_parent_dir), my_uuid, ('local', 'remote')).val
 			if PARENT is not None:
 				PARENT = PARENT['abspath']
 
@@ -915,8 +915,8 @@ class Bfg:
 
 
 
-	def pull(s, REMOTE_SNAPSHOT, LOCAL_SUBVOLUME, PARENT=None, CLONESRCS=[]):
-		local_snapshot_parent_dir = s.calculate_default_snapshot_parent_dir('local', Path(LOCAL_SUBVOLUME)).val
+	def pull(s, REMOTE_SNAPSHOT, LOCAL_SUBVOL, PARENT=None, CLONESRCS=[]):
+		local_snapshot_parent_dir = s.calculate_default_snapshot_parent_dir('local', Path(LOCAL_SUBVOL)).val
 		s._local_cmd(['mkdir', '-p', str(local_snapshot_parent_dir)])
 
 		if PARENT is None:
