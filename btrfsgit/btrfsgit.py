@@ -202,11 +202,13 @@ class Bfg:
 		return self._remote_fs_id5_mount_point
 
 
-	def find_local_fs_id5_mount_point(self, subvolume):
+	def find_local_fs_id5_mount_point(s, subvolume):
 		dir = Path(subvolume)
 		while True:
 			try:
-				with open(dir / 'id5', 'r') as f:
+				fn = dir / 'id5'
+				logbfg.info(f'find_local_fs_id5_mount_point: {fn=}')
+				with open(fn, 'r') as f:
 					return Path(f.read().strip())
 			except FileNotFoundError:
 				new_dir = dir.parent
@@ -215,7 +217,7 @@ class Bfg:
 				dir = new_dir
 
 
-	def find_remote_fs_id5_mount_point(self, subvolume):
+	def find_remote_fs_id5_mount_point(s, subvolume):
 		dir = Path(subvolume)
 		while True:
 			r = s._remote_cmd(['cat', dir / 'id5'], die_on_error=False)
@@ -241,16 +243,21 @@ class Bfg:
 		subvols = []
 		logger = logging.getLogger('_get_subvolumes')
 
+		if src == 'local':
+			fs = s.local_fs_id5_mount_point(subvolume)
+		else:
+			fs = s.remote_fs_id5_mount_point(subvolume)
+
 		cmd = ['btrfs', 'subvolume', 'list', '-q', '-t', '-R', '-u']
 		for line in command_runner(cmd + [subvolume], logger=logbtrfs).splitlines()[2:]:
-			subvol = s._make_snapshot_struct_from_sub_list_output_line(line)
+			subvol = s._make_snapshot_struct_from_sub_list_output_line(fs, line)
 			subvol['src'] = src + '_btrfs'
 			logger.debug(subvol)
 			subvols.append(subvol)
 
 		ro_subvols = set()
 		for line in command_runner(cmd + ['-r', subvolume], logger=logbtrfs).splitlines()[2:]:
-			subvol = s._make_snapshot_struct_from_sub_list_output_line(line)
+			subvol = s._make_snapshot_struct_from_sub_list_output_line(fs, line)
 			ro_subvols.add(subvol['local_uuid'])
 		# _prerr(str(ro_subvols))
 
@@ -262,11 +269,11 @@ class Bfg:
 				i['fs_uuid'] = s.local_fs_uuid(subvolume)
 
 		subvols.sort(key=lambda sv: -sv['subvol_id'])
-		logbtrfs.debug(f'_get_subvolumes: {len(subvols)=}')
+		logbfg.info(f'_get_subvolumes: {len(subvols)=}')
 		return subvols
 
 
-	def _make_snapshot_struct_from_sub_list_output_line(s, line):
+	def _make_snapshot_struct_from_sub_list_output_line(s, fs, line):
 		#logging.debug('line:'+line)
 		items = line.split()
 		subvol_id = items[0]
@@ -279,7 +286,7 @@ class Bfg:
 		snapshot['parent_uuid'] = parent_uuid
 		snapshot['local_uuid'] = local_uuid
 		snapshot['subvol_id'] = int(subvol_id)
-		snapshot['path'] = s.local_fs_id5_mount_point(items[6]) / items[6]
+		snapshot['path'] = fs / items[6]
 		logging.debug(snapshot)
 
 		return snapshot
@@ -631,7 +638,7 @@ class Bfg:
 		logbtrfs.debug(f'get_local_snapshots...')
 		logger = logging.getLogger('get_local_snapshots')
 		uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
-		subvols = s._get_subvolumes(s._local_cmd, SUBVOL)
+		subvols = s._get_subvolumes(s._local_cmd, SUBVOL, 'local')
 		logger.debug(f'{subvols=}')
 
 		snapshots = []
@@ -668,7 +675,7 @@ class Bfg:
 
 	def get_local_subvolumes(s, SUBVOL):
 		"""list subvolumes on the local machine"""
-		return Res(s._get_subvolumes(s._local_cmd, SUBVOL))
+		return Res(s._get_subvolumes(s._local_cmd, SUBVOL), 'local')
 
 
 
