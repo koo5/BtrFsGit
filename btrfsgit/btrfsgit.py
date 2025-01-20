@@ -185,6 +185,7 @@ class Bfg:
 	"""
 
 	def local_fs_id5_mount_point(self, subvolume):
+		subvolume = str(subvolume)
 		# if subvolume not in self._local_fs_id5_mount_points:
 		# 	self._local_fs_id5_mount_points[subvolume] = self.find_local_fs_id5_mount_point(subvolume)
 		# return self._local_fs_id5_mount_points[subvolume]
@@ -194,6 +195,7 @@ class Bfg:
 
 
 	def remote_fs_id5_mount_point(self, subvolume):
+		subvolume = str(subvolume)
 		# if subvolume not in self._remote_fs_id5_mount_points:
 		# 	self._remote_fs_id5_mount_points[subvolume] = self.find_remote_fs_id5_mount_point(subvolume)
 		# return self._remote_fs_id5_mount_points[subvolume]
@@ -293,6 +295,7 @@ class Bfg:
 
 
 	def local_fs_uuid(self, subvol):
+		subvol = str(subvol)
 		# if subvol not in self._local_fs_uuid:
 		# 	self._local_fs_uuid[subvol] = self.get_fs_uuid(subvol)
 		# # check that all values are the same, because we should only be working with one local filesystem
@@ -307,7 +310,7 @@ class Bfg:
 	def get_fs_uuid(s, subvol):
 		logbfg.info(f'get_fs_uuid {subvol=}')
 		l = s._local_cmd(f'btrfs filesystem show ' + str(s.local_fs_id5_mount_point(subvol))).splitlines()[0]
-		r = r"Label:\s+'.*'\s+uuid:\s+([a-f0-9-]+)$"
+		r = r"Label:\s+.*\s+uuid:\s+([a-f0-9-]+)$"
 		fs_uuid = re.match(r, l).group(1)
 		logbfg.info(f'get_fs: {fs_uuid=}')
 		return fs_uuid
@@ -359,8 +362,8 @@ class Bfg:
 					parent_uuid=snapshot['parent_uuid'],
 					received_uuid=snapshot['received_uuid'],
 					host=snapshot['host'],
-					fs=FS,
-					path=snapshot['path'],
+					fs=str(FS),
+					path=str(snapshot['path']),
 					fs_uuid=snapshot['fs_uuid'],
 					subvol_id=snapshot['subvol_id'],
 					ro=snapshot['ro'],
@@ -864,7 +867,7 @@ class Bfg:
 
 			logbfg.info(f"all2: {len(all2)}")
 			logbfg.info(f"_parent_candidates2...")
-			candidates = list(s._parent_candidates2(all2, s._subvol_uuid , ('local', 'remote')))
+			candidates = list(s._parent_candidates2(all2, SUBVOL, s._subvol_uuid , ('local', 'remote')))
 
 			logbfg.info(f"shared parents: {len(candidates)}")
 
@@ -1034,14 +1037,14 @@ class Bfg:
 
 	def _local_add_abspath(s, subvol_record):
 		id5_mp = s.local_fs_id5_mount_point(subvol_record['path'])
-		subvol_record['abspath'] = id5_mp + '/' + s._local_cmd(
+		subvol_record['abspath'] = str(id5_mp) + '/' + s._local_cmd(
 			['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), id5_mp]).strip()
 
 
 
 	def _remote_add_abspath(s, subvol_record):
 		id5_mp = s.remote_fs_id5_mount_point(subvol_record['path'])
-		subvol_record['abspath'] = id5_mp + '/' + s._remote_cmd(
+		subvol_record['abspath'] = str(id5_mp) + '/' + s._remote_cmd(
 			['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), id5_mp]).strip()
 
 
@@ -1054,38 +1057,41 @@ class Bfg:
 		return Res(candidates)
 
 
+	def get_local_subvol(s, subvol_path):
+		toplevel_subvol = s.get_subvol(s._local_cmd, subvol_path).val
+		toplevel_subvol['src'] = 'get_subvol'
+		toplevel_subvol['machine'] = 'local'
+		return toplevel_subvol
 
-	def _parent_candidates(s, subvolume, remote_subvolume, my_uuid, direction):
+
+	def _parent_candidates(s, subvol_path, remote_subvolume, my_uuid, direction):
 		logbfg.info(f'_get_subvolumes remote...')
 		remote_subvols = s._get_subvolumes(s._remote_cmd, remote_subvolume, 'remote')
 		logbfg.info(f'_get_subvolumes local...')
-		local_subvols = s._get_subvolumes(s._local_cmd, subvolume, 'local')
-
-		#other_subvols = load_subvol_dumps()
-		#toplevel_subvol = s.get_subvol(s._local_cmd, subvolume).val
-		#toplevel_subvol['src'] = 'get_subvol'
-		#toplevel_subvols = [toplevel_subvol]
+		local_subvols = s._get_subvolumes(s._local_cmd, subvol_path, 'local')
 
 		all_subvols = []
 		for machine, lst in [
 			('remote', remote_subvols),
 			('local', local_subvols),
-#			('other', other_subvols),
-#			('local', toplevel_subvols)
 		]:
 			for v in lst:
 				v['machine'] = machine
 				all_subvols.append(v)
 
-		yield from s._parent_candidates2(all_subvols, my_uuid, direction)
+		yield from s._parent_candidates2(all_subvols, subvol_path, my_uuid, direction)
 
 
 
-	def _parent_candidates2(s, all_subvols, my_uuid, direction):
+	def _parent_candidates2(s, all_subvols, subvol_path, my_uuid, direction):
 		"""
 		my uuid is the local_uuid of the local rw subvolume that we're trying to transfer to the remote machine.
 		direction is either ('local', 'remote') or ('remote', 'local')
 		"""
+
+		all_subvols = all_subvols + [s.get_local_subvol(subvol_path)]
+
+
 		all_subvols2 = {}
 		for i in all_subvols:
 

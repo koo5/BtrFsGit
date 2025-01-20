@@ -31,7 +31,7 @@ class VolWalker:
 
 		if my_uuid not in s.by_uuid:
 			# the show almost stops here, but only almost. We could still look up all subvols that have this uuid as a parent/received uuid, and pursue those. It wouldn't be known if the missing subvol was ro or rw, so, these could be presented as only the last case options to try.
-			logging.debug('my_uuid not in s.by_uuid')
+			logging.info('my_uuid not in s.by_uuid')
 			return #fixme
 
 		for i in s.ro_chain(my_uuid):
