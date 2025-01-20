@@ -269,6 +269,8 @@ class Bfg:
 			if src == 'local':
 				i['host'] = s.host
 				i['fs_uuid'] = s.local_fs_uuid(subvolume)
+			if '.bfg_snapshots' in i['path'].parts:
+				i['dt'] = s.snapshot_dt(i)
 
 		subvols.sort(key=lambda sv: -sv['subvol_id'])
 		logbfg.info(f'_get_subvolumes: {len(subvols)=}')
@@ -481,6 +483,7 @@ class Bfg:
 
 
 	def snapshot_dt(s, snapshot):
+		logbfg.debug(f'snapshot_dt {snapshot=}')
 		dname = snapshot['path'].name
 		# Typical pattern might be:
 		#   <subvol>_bfg_snapshots_<timestamp>_<tag>
@@ -842,13 +845,13 @@ class Bfg:
 		s._subvol_uuid = s.get_subvol(s._local_cmd, LOCAL_SUBVOL).val['local_uuid']
 
 
+		all = s.all_subvols_from_db()
+
 		local_mrcs = s.most_recent_common_snapshots(all, LOCAL_SUBVOL)
 		# local_mrcs is a list with one snapshot entry for each "remote" filesystem
 		remote_mrcs = []
 
-		all = s.all_subvols_from_db()
-
-		remote_fs_uuid = s.remote_fs_uuid(all, REMOTE_SUBVOL)
+		remote_fs_uuid = s.remote_fs_uuid(REMOTE_SUBVOL)
 
 		for snap in local_mrcs:
 			for snap2 in all:
@@ -861,7 +864,7 @@ class Bfg:
 		logbfg.info(f"{mrcs=}")
 
 
-		remote_snapshots = s.remote_bfg_snapshots(all, s._subvol_uuid)
+		remote_snapshots = s.remote_bfg_snapshots(REMOTE_SUBVOL, remote_fs_uuid)
 		remote_snapshots = sorted(remote_snapshots, key=lambda x: x['dt'])
 		newest = remote_snapshots[-1]['path']
 		buckets = s.put_snapshots_into_buckets(remote_snapshots)
@@ -906,10 +909,28 @@ class Bfg:
 
 	def local_bfg_snapshots(s, all, SUBVOL):
 		result = []
-
 		for snap in all:
 			if snap['parent_uuid'] == s._subvol_uuid and not snap['deleted'] and '.bfg_snapshots' in snap['path'].parts:
 				result.append(snap)
+		return result
+
+
+	def remote_bfg_snapshots(s, REMOTE_SUBVOL, remote_fs_uuid):
+		all = s._get_subvolumes(s._remote_cmd, REMOTE_SUBVOL, 'remote')
+		result = []
+
+		p = Path(s.calculate_default_snapshot_parent_dir('remote', Path(REMOTE_SUBVOL)).val)
+		logbfg.info(f"remote_bfg_snapshots: calculate_default_snapshot_parent_dir: {p=}")
+
+		for snap in all:
+			path = snap['path']
+			logbfg.debug(f"remote_bfg_snapshots {path=}")
+			if not '.bfg_snapshots' in path.parts:
+				continue
+			if path.parent != p:
+				continue
+			result.append(snap)
+			logbfg.info(f"remote_bfg_snapshots: found {snap['path']}")
 
 		return result
 
@@ -1166,8 +1187,11 @@ class Bfg:
 		direction is either ('local', 'remote') or ('remote', 'local')
 		"""
 
-		all_subvols = all_subvols + [s.get_local_subvol(subvol_path)]
-
+		all_subvols2 = {}
+		for i in all_subvols:
+			all_subvols2[i['local_uuid']] = i
+		if my_uuid not in all_subvols2:
+			all_subvols = all_subvols + [s.get_local_subvol(subvol_path)]
 
 		all_subvols2 = {}
 		for i in all_subvols:
