@@ -307,13 +307,22 @@ class Bfg:
 		return self._local_fs_uuid
 
 
-	def get_fs_uuid(s, subvol):
-		logbfg.info(f'get_fs_uuid {subvol=}')
-		l = s._local_cmd(f'btrfs filesystem show ' + str(s.local_fs_id5_mount_point(subvol))).splitlines()[0]
+	def fs_uuid_from_fs_show_output(self, output):
+		line = output.splitlines()[0]
 		r = r"Label:\s+.*\s+uuid:\s+([a-f0-9-]+)$"
-		fs_uuid = re.match(r, l).group(1)
+		fs_uuid = re.match(r, line).group(1)
 		logbfg.info(f'get_fs: {fs_uuid=}')
 		return fs_uuid
+
+
+	def remote_fs_uuid(s, subvol):
+		logbfg.info(f'remote_fs_uuid {subvol=}')
+		return s.fs_uuid_from_fs_show_output(s._remote_cmd(f'btrfs filesystem show ' + str(s.remote_fs_id5_mount_point(subvol))))
+
+
+	def get_fs_uuid(s, subvol):
+		logbfg.info(f'get_fs_uuid {subvol=}')
+		return s.fs_uuid_from_fs_show_output(s._local_cmd(f'btrfs filesystem show ' + str(s.local_fs_id5_mount_point(subvol))))
 
 
 	def get_subvol(s, runner, path):
@@ -395,6 +404,7 @@ class Bfg:
 
 
 	def remote_fs_uuids(s, all, subvol):
+		""" remote fs uuids by db """
 		logbfg.info(f'remote_fs_uuids...')
 		fss = {}
 		for snap in all:
@@ -757,8 +767,7 @@ class Bfg:
 
 
 
-
-	def prune(s, SUBVOL, CHECK_WITH_DB=True, DRY_RUN=False):
+	def prune_local(s, SUBVOL, DRY_RUN=False):
 		"""
 		Prune old snapshots under SUBVOL according to a time-based retention policy.
 
@@ -774,19 +783,18 @@ class Bfg:
 
 		logbfg.info(f"Pruning snapshots for {SUBVOL=}")
 		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
-
 		all = s.all_subvols_from_db()
+		mrcs = set([x['path'] for x in s.most_recent_common_snapshots(all, SUBVOL)])
+		logbfg.info(f"{mrcs=}")
 
 		local_snapshots = s.local_bfg_snapshots(all, SUBVOL)
 		local_snapshots = sorted(local_snapshots, key=lambda x: x['dt'])
+
 		if len(local_snapshots) == 0:
 			logbfg.info(f"No snapshots found for {SUBVOL}")
 			return
 
 		newest = local_snapshots[-1]['path']
-
-		mrcs = set([x['path'] for x in s.most_recent_common_snapshots(all, SUBVOL)])
-		logbfg.info(f"{mrcs=}")
 
 		buckets = s.put_snapshots_into_buckets(local_snapshots)
 
@@ -821,6 +829,75 @@ class Bfg:
 					if not s._yes(shlex.join(cmd)):
 						continue
 					s._local_cmd(cmd)
+					_prerr(f"Deleted snapshot: {path}")
+
+		_prerr("No more buckets.")
+
+
+	def prune_remote(s, LOCAL_SUBVOL, REMOTE_SUBVOL, DRY_RUN=False):
+
+		# prepare_prune
+
+		logbfg.info(f"Pruning remote snapshots of {LOCAL_SUBVOL=}")
+		s._subvol_uuid = s.get_subvol(s._local_cmd, LOCAL_SUBVOL).val['local_uuid']
+
+
+		local_mrcs = s.most_recent_common_snapshots(all, LOCAL_SUBVOL)
+		# local_mrcs is a list with one snapshot entry for each "remote" filesystem
+		remote_mrcs = []
+
+		all = s.all_subvols_from_db()
+
+		remote_fs_uuid = s.remote_fs_uuid(all, REMOTE_SUBVOL)
+
+		for snap in local_mrcs:
+			for snap2 in all:
+				if snap2['fs_uuid'] == remote_fs_uuid:
+					if snap['local_uuid'] == snap2['received_uuid']:
+						remote_mrcs.append(snap2)
+
+		mrcs = set([x['path'] for x in remote_mrcs])
+
+		logbfg.info(f"{mrcs=}")
+
+
+		remote_snapshots = s.remote_bfg_snapshots(all, s._subvol_uuid)
+		remote_snapshots = sorted(remote_snapshots, key=lambda x: x['dt'])
+		newest = remote_snapshots[-1]['path']
+		buckets = s.put_snapshots_into_buckets(remote_snapshots)
+
+
+		for bucket, snaplist in buckets.items():
+			logbfg.info(f"Bucket: {bucket}")
+
+			for i,snap in enumerate(snaplist):
+				path = snap['path']
+
+				is_newest = path == newest
+				is_mrc = path in mrcs
+				is_last = i == len(snaplist) - 1
+				is_prunable = not is_newest and not is_mrc and not is_last
+
+				flags = ''
+				if is_mrc:
+					flags += ' (mrc)'
+				if is_newest:
+					flags += ' (newest)'
+				if is_last:
+					flags += ' (last)'
+				if is_prunable:
+					flags += ' (prunable)'
+				logbfg.info(f"  {path}{flags}")
+
+				if is_mrc:
+					logbfg.info(f"this is the most recent common snapshot as calculated from db, stopping here.")
+					return
+
+				if is_prunable and not DRY_RUN:
+					cmd = ['btrfs', 'subvolume', 'delete', str(path)]
+					if not s._yes(shlex.join(cmd)):
+						continue
+					s._remote_cmd(cmd)
 					_prerr(f"Deleted snapshot: {path}")
 
 		_prerr("No more buckets.")
