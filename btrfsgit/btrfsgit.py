@@ -208,7 +208,7 @@ class Bfg:
 		dir = Path(subvolume)
 		while True:
 			try:
-				fn = dir / 'id5'
+				fn = dir / '.bfg' / 'id5'
 				logbfg.info(f'find_local_fs_id5_mount_point: {fn=}')
 				with open(fn, 'r') as f:
 					return Path(f.read().strip())
@@ -222,7 +222,7 @@ class Bfg:
 	def find_remote_fs_id5_mount_point(s, subvolume):
 		dir = Path(subvolume)
 		while True:
-			r = s._remote_cmd(['cat', dir / 'id5'], die_on_error=False)
+			r = s._remote_cmd(['cat', dir / '.bfg' / 'id5'], die_on_error=False)
 			if r != -1:
 				return Path(r.strip())
 			new_dir = dir.parent
@@ -347,7 +347,6 @@ class Bfg:
 	"""
 	db stuff
 	"""
-
 
 	def update_db(s, FS):
 		"""
