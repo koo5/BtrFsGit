@@ -21,7 +21,12 @@ snapshot naming conventions:
 - the name itself should ideally be the full path (relative to id5 mount point), with slashes replaced by something you're not likely to find in a directory name (some unicode?), or the actual character should be escaped.
 - the path should always be something like .bfg_snapshots/<subvol>/<snapshot>, to solve the previous point
 
+pruning:
+- pruning should work even when the remote machine is offline, so, a database is used and should be automatically updated from both (all) machines after backups and before pruning
+- if it's not updated, a snapshot that is really the Most Recent Common Snapshot (MRCS) will be deleted, and the next backup will have to transfer extra data.
 
+implementation points:
+- btrfs subvolume list omits the actual id5 subvol, so, the code has to work around this by making an extra btrfs sub show call (if my_uuid not in all_subvols2:...)
 
 
 """
