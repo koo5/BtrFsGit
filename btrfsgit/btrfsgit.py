@@ -2,6 +2,28 @@
 
 """
 BtrFsGit
+
+ID5 mount points:
+- due to kernel and btrfs limitations, you should use id5 mount points for the btrfs filesystems you want to work with.
+ - there was previously a parameter for this, but now we expect a subvolume .bfg containing a file named id5
+  - subvolume and not just a directory, because we need to avoid transferring it when we're transferring the root subvolume
+  - the id5 file should contain the id5 mount point of the filesystem
+
+the missing abstraction that would link a received snapshot to the (optional) target subvolume:
+- a subvolume can be "checked out" on the other side
+- for example, running: `bfg prune_remote --LOCAL_SUBVOL=/var --REMOTE_SUBVOL=/backup/var` needs to know that snapshots, of all in the filesystem, belong to /backup/var
+- i don't want to make this tool rely on the database for this kind of info,
+- but the only other way is to either introduce some kind of local metadata file mechanism somewhat equivalent to a local database
+- or to rely on naming conventions, which is what we do here
+
+snapshot naming conventions:
+- a fix is needed to produce subdirectories even for the local case.
+- the name itself should ideally be the full path (relative to id5 mount point), with slashes replaced by something you're not likely to find in a directory name (some unicode?), or the actual character should be escaped.
+- the path should always be something like .bfg_snapshots/<subvol>/<snapshot>, to solve the previous point
+
+
+
+
 """
 
 import logging
