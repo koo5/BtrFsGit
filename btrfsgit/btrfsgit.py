@@ -319,7 +319,9 @@ class Bfg:
 
 	def remote_fs_uuid(s, subvol):
 		logbfg.info(f'remote_fs_uuid {subvol=}')
-		return s.fs_uuid_from_fs_show_output(s._remote_cmd(f'btrfs filesystem show ' + str(s.remote_fs_id5_mount_point(subvol))))
+		mp = s.remote_fs_id5_mount_point(subvol)
+		uuid = s.fs_uuid_from_fs_show_output(s._remote_cmd(f'btrfs filesystem show ' + str(mp)))
+		return uuid, mp
 
 
 	def get_fs_uuid(s, subvol):
@@ -850,7 +852,7 @@ class Bfg:
 		# local_mrcs is a list with one snapshot entry for each "remote" filesystem
 		remote_mrcs = []
 
-		remote_fs_uuid = s.remote_fs_uuid(REMOTE_SUBVOL)
+		remote_fs_uuid, remote_fs_mp = s.remote_fs_uuid(REMOTE_SUBVOL)
 
 		for snap in local_mrcs:
 			for snap2 in all:
@@ -863,8 +865,13 @@ class Bfg:
 		logbfg.info(f"{mrcs=}")
 
 
-		remote_snapshots = s.remote_bfg_snapshots(REMOTE_SUBVOL, remote_fs_uuid)
+		remote_snapshots = s.remote_bfg_snapshots(remote_fs_mp, remote_fs_uuid)
 		remote_snapshots = sorted(remote_snapshots, key=lambda x: x['dt'])
+
+		if len(remote_snapshots) == 0:
+			logbfg.info(f"No snapshots found for {REMOTE_SUBVOL}")
+			return
+
 		newest = remote_snapshots[-1]['path']
 		buckets = s.put_snapshots_into_buckets(remote_snapshots)
 
