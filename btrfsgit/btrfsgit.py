@@ -22,7 +22,16 @@ snapshot naming conventions:
 - the path should always be something like .bfg_snapshots/<subvol>/<snapshot>, to solve the previous point
 
 pruning:
-- pruning should work even when the remote machine is offline, so, a database is used and should be automatically updated from both (all) machines after backups and before pruning
+- pruning should work even when the remote machine is offline,
+- to know which snapshots to keep, we need to know which snapshots are the most recent common snapshots (MRCS) between the local and each remote filesystem
+- we also need to link each snapshot to the source or target subvol:
+-- for local backups, which are local snapshots of local subvols, this is easy, with parent_uuid
+-- for the snapshots transferred to remote machines, this is hard:
+--- they have no inherent link to the intended target subvol
+--- they have received_uuid, but that only tells us the uuid of the snapshot that was sent, and that snapshot can already be gone, so, no way to trace it back to the source subvol
+
+
+- a database is used and should be automatically updated from both (all) machines after backups and before pruning
 - if it's not updated, a snapshot that is really the Most Recent Common Snapshot (MRCS) will be deleted, and the next backup will have to transfer extra data.
 
 implementation points:
