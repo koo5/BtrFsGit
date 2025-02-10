@@ -14,9 +14,12 @@ B-tree Filesystem Git attempts to enable git-like workflow for subvolumes. Commi
 
 ## dev install:
 ```
-pip install --user poetry
+#pip install --user poetry
+pipx install poetry
 `cd BtrFsGit
-poetry install # only installs the executable into somewhere like `/.cache/pypoetry/virtualenvs/bfg-iXQCHChq-py3.6/bin/`. It just doesn't have a "development mode" like setuptools have with `pip install -e .`. So find that directory, and copy the `bfg` into your `~/.local/bin/`. But that's about to be [fixed soon](https://github.com/python-poetry/poetry/issues/34).
+poetry install # only installs the executable into somewhere like `/.cache/pypoetry/virtualenvs/bfg-iXQCHChq-py3.6/bin/`. In old versions, poetry just doesn't have a "development mode" like setuptools have with `pip install -e .`. So find that directory, and copy the `bfg` into your `~/.local/bin/`. But that's about to be [fixed soon](https://github.com/python-poetry/poetry/issues/34).
+pipx install -e .
+
 ```
 
 
