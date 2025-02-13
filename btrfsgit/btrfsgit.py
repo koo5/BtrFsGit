@@ -807,7 +807,7 @@ class Bfg:
 
 
 
-	def prune_local(s, SUBVOL, DRY_RUN=False):
+	def prune_local(s, SUBVOL, DB=True, DRY_RUN=False):
 		"""
 		Prune old snapshots under SUBVOL according to a time-based retention policy.
 
@@ -823,9 +823,16 @@ class Bfg:
 
 		logbfg.info(f"Pruning snapshots for {SUBVOL=}")
 		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
-		all = s.all_subvols_from_db()
-		mrcs = set([x['path'] for x in s.most_recent_common_snapshots(all, SUBVOL)])
-		logbfg.info(f"{mrcs=}")
+
+		print(DB)
+
+		if DB:
+			all = s.all_subvols_from_db()
+			mrcs = set([x['path'] for x in s.most_recent_common_snapshots(all, SUBVOL)])
+			logbfg.info(f"{mrcs=}")
+		else:
+			all = []
+			mrcs = set()
 
 		local_snapshots = s.local_bfg_snapshots(all, SUBVOL)
 		local_snapshots = sorted(local_snapshots, key=lambda x: x['dt'])
