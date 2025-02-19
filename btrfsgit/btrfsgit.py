@@ -564,16 +564,18 @@ class Bfg:
 			runner(['mkdir', '-p', str(SUBVOL)], logger=logger)
 
 			# hope to come up with a unique file names:
-			f1 = str(time.time())
+			f1 = 'bfg_' + str(time.time())
 			f2 = f1 + "_dest"
 			runner(['touch', str(SUBVOL / f1)], logger=logger)
 
 			if runner(['cp', '--reflink', SUBVOL / f1, parent / f2], die_on_error=False, logger=logger) != -1:
 				snapshot_parent_dir = parent
+				runner(['rm', parent / f2])
 			else:
 				_prerr(
 					f'cp --reflink failed, this means that {parent} is not the same filesystem, going to make snapshot inside {SUBVOL} instead of {parent}')
 				snapshot_parent_dir = SUBVOL
+			runner(['rm', SUBVOL / f1])
 
 		r = str(Path(
 			str(snapshot_parent_dir) + '/.bfg_snapshots/' + Path(SUBVOL).parts[-1]).absolute())
