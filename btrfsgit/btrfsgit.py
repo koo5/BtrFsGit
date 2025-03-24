@@ -177,7 +177,7 @@ class Bfg:
 
 	"""
 
-	def _remote_cmd(s, cmd, die_on_error=True, logger=None):
+	def _remote_cmd(s, cmd, die_on_error=True, logger=None, capture_stderr=False):
 		"""potentially remote command"""
 		if logger is None:
 			logger = logging.getLogger('btrfs')
@@ -189,25 +189,35 @@ class Bfg:
 			ssh = shlex.split(s._sshstr)
 			cmd2 = ssh + s._sudo + cmd
 			logger.debug(shlex.join(cmd2))
-			return s._cmd(cmd2, die_on_error)
+			return s._cmd(cmd2, die_on_error, capture_stderr=capture_stderr)
 		else:
-			return s._local_cmd(cmd, die_on_error)
+			return s._local_cmd(cmd, die_on_error, capture_stderr=capture_stderr)
 
 
-	def _local_cmd(s, c, die_on_error=True, logger=None):
+	def _local_cmd(s, c, die_on_error=True, logger=None, capture_stderr=False):
 		if logger is None:
 			logger = logging.getLogger('btrfs')
 		if not isinstance(c, list):
 			c = shlex.split(c)
 		c = s._sudo + [str(x) for x in c]
 		logger.debug(shlex.join(c))
-		return s._cmd(c, die_on_error)
+		return s._cmd(c, die_on_error, capture_stderr)
 
 
-	def _cmd(s, c, die_on_error):
+	def _cmd(s, c, die_on_error, capture_stderr=False):
+		"""
+		capture_stderr: don't let stderr go to the terminal. This is used for commands expected to fail, like using cp --reflink to detect filesystem boundaries.
+		"""
 		try:
-			return subprocess.check_output(c, text=True)
-		except Exception as e:
+			if capture_stderr:
+				stderr = subprocess.STDOUT
+			else:
+				stderr = None
+			result = subprocess.check_output(c, text=True, stderr=stderr)
+			# fixme: use popen so that we can capture stderr and log it even on failure
+			logbfg.debug(result)
+			return result
+		except subprocess.CalledProcessError as e:
 			if die_on_error:
 				_prerr(e)
 				exit(1)
@@ -245,7 +255,7 @@ class Bfg:
 		while True:
 			try:
 				fn = dir / '.bfg' / 'id5'
-				logbfg.info(f'find_local_fs_id5_mount_point: {fn=}')
+				logbfg.debug(f'find_local_fs_id5_mount_point: {fn=}')
 				with open(fn, 'r') as f:
 					return Path(f.read().strip())
 			except FileNotFoundError:
@@ -258,7 +268,7 @@ class Bfg:
 	def find_remote_fs_id5_mount_point(s, subvolume):
 		dir = Path(subvolume)
 		while True:
-			r = s._remote_cmd(['cat', dir / '.bfg' / 'id5'], die_on_error=False)
+			r = s._remote_cmd(['cat', dir / '.bfg' / 'id5'], die_on_error=False, capture_stderr=True)
 			if r != -1:
 				return Path(r.strip())
 			new_dir = dir.parent
@@ -309,7 +319,7 @@ class Bfg:
 				i['dt'] = s.snapshot_dt(i)
 
 		subvols.sort(key=lambda sv: -sv['subvol_id'])
-		logbfg.info(f'_get_subvolumes: {len(subvols)=}')
+		logbfg.debug(f'_get_subvolumes: {len(subvols)=}')
 		return subvols
 
 
@@ -349,19 +359,19 @@ class Bfg:
 		line = output.splitlines()[0]
 		r = r"Label:\s+.*\s+uuid:\s+([a-f0-9-]+)$"
 		fs_uuid = re.match(r, line).group(1)
-		logbfg.info(f'get_fs: {fs_uuid=}')
+		logbfg.debug(f'get_fs: {fs_uuid=}')
 		return fs_uuid
 
 
 	def remote_fs_uuid(s, subvol):
-		logbfg.info(f'remote_fs_uuid {subvol=}')
+		logbfg.debug(f'remote_fs_uuid {subvol=}')
 		mp = s.remote_fs_id5_mount_point(subvol)
 		uuid = s.fs_uuid_from_fs_show_output(s._remote_cmd(f'btrfs filesystem show ' + str(mp)))
 		return uuid, mp
 
 
 	def get_fs_uuid(s, subvol):
-		logbfg.info(f'get_fs_uuid {subvol=}')
+		logbfg.debug(f'get_fs_uuid {subvol=}')
 		return s.fs_uuid_from_fs_show_output(s._local_cmd(f'btrfs filesystem show ' + str(s.local_fs_id5_mount_point(subvol))))
 
 
@@ -391,18 +401,20 @@ class Bfg:
 		blast the db with all the subvols we can find on the filesystem.
 		"""
 		snapshots = s.get_all_subvols_on_filesystem(FS).val
-		logbfg.info(f'db.session()...')
+		logbfg.debug(f'db.session()...')
 		session = db.session()
 		with session.begin():
-			logbfg.info(f'got db session...')
+			logbfg.debug(f'got db session...')
 
-			logbfg.info(f'purge db of all snapshots with fs_uuid={s.local_fs_uuid(FS)}...')
+			logbfg.info(f'updating db with current list of snapshots on {FS}...')
+
+			logbfg.debug(f'purge db of all snapshots with fs_uuid={s.local_fs_uuid(FS)}...')
 			session.query(db.Snapshot).filter(db.Snapshot.fs_uuid == s.local_fs_uuid(FS)).delete()
 
-			logbfg.info(f'insert snapshots into db...')
+			logbfg.debug(f'insert snapshots into db...')
 			for i,snapshot in enumerate(snapshots):
 				if i % 100 == 0:
-					logbfg.info(f'{i=}')
+					logbfg.debug(f'{i=}')
 				logbfg.debug(f'{snapshot=}')
 				db_snapshot = db.Snapshot(
 					id=snapshot['fs_uuid']+'_'+snapshot['local_uuid'],
@@ -417,15 +429,15 @@ class Bfg:
 					ro=snapshot['ro'],
 				)
 				session.add(db_snapshot)
-			logbfg.info(f'commit...')
+			logbfg.debug(f'commit...')
 
 
 	def all_subvols_from_db(s):
-		logbfg.info(f'all_snapshots_from_db...')
+		logbfg.debug(f'all_snapshots_from_db...')
 		session = db.session()
 		with session.begin():
-			logbfg.info(f'got db session.')
-			logbfg.info(f'query all snapshots from db...')
+			logbfg.debug(f'got db session.')
+			logbfg.debug(f'query all snapshots from db...')
 			all = list(session.query(db.Snapshot).options(undefer("*")).all())
 
 			r = [{
@@ -438,13 +450,13 @@ class Bfg:
 					x['dt'] = s.snapshot_dt(x)
 				x['src'] = 'db'
 
-			logbfg.info(f'got {len(r)} snapshots from db.')
+			logbfg.debug(f'got {len(r)} snapshots from db.')
 			return r
 
 
 	def remote_fs_uuids(s, all, subvol):
 		""" remote fs uuids by db """
-		logbfg.info(f'remote_fs_uuids...')
+		logbfg.debug(f'remote_fs_uuids...')
 		fss = {}
 		for snap in all:
 			snap_fs_uuid = snap['fs_uuid']
@@ -568,18 +580,18 @@ class Bfg:
 			f2 = f1 + "_dest"
 			runner(['touch', str(SUBVOL / f1)], logger=logger)
 
-			if runner(['cp', '--reflink', SUBVOL / f1, parent / f2], die_on_error=False, logger=logger) != -1:
+			if runner(['cp', '--reflink', SUBVOL / f1, parent / f2], die_on_error=False, logger=logger, capture_stderr=True) != -1:
 				snapshot_parent_dir = parent
 				runner(['rm', parent / f2])
 			else:
-				_prerr(
+				logbfg.debug(
 					f'cp --reflink failed, this means that {parent} is not the same filesystem, going to make snapshot inside {SUBVOL} instead of {parent}')
 				snapshot_parent_dir = SUBVOL
 			runner(['rm', SUBVOL / f1])
 
 		r = str(Path(
 			str(snapshot_parent_dir) + '/.bfg_snapshots/' + Path(SUBVOL).parts[-1]).absolute())
-		logging.getLogger('utils').info(f'calculate_default_snapshot_parent_dir: {SUBVOL=} -> {r=}')
+		logging.getLogger('utils').debug(f'calculate_default_snapshot_parent_dir: {SUBVOL=} -> {r=}')
 		return Res(r)
 
 
@@ -684,7 +696,7 @@ class Bfg:
 				logger.debug(f'YES')
 				result.append(snapshot)
 				snapshot['dt'] = s.snapshot_dt(snapshot)
-		logbfg.info(f'get_local_bfg_snapshots_for_subvol: {len(result)=}')
+		logbfg.debug(f'get_local_bfg_snapshots_for_subvol: {len(result)=}')
 		return Res(result)
 
 
@@ -705,13 +717,13 @@ class Bfg:
 			else:
 				logger.debug(f'NO')
 
-		logbtrfs.info(f'get_local_snapshots: {len(snapshots)=}')
+		logbtrfs.debug(f'get_local_snapshots: {len(snapshots)=}')
 		return Res(snapshots)
 
 
 	def get_all_subvols_on_filesystem(s, subvol):
 		"""list all subvolumes on the filesystem"""
-		logbfg.info	(f'get_all_subvols_on_filesystem...')
+		logbfg.debug(f'get_all_subvols_on_filesystem...')
 		logger = logging.getLogger('get_all_subvols_on_filesystem')
 		subvols = s._get_subvolumes(s._local_cmd, s.local_fs_id5_mount_point(subvol), 'local')
 		logger.debug(f'{subvols=}')
@@ -723,7 +735,7 @@ class Bfg:
 			subvol['id'] = subvol['fs_uuid'] + '_' + subvol['local_uuid']
 			subvol['host'] = s.host
 
-		logbtrfs.info(f'get_all_subvols_on_filesystem: {len(subvols)=}')
+		logbtrfs.debug(f'get_all_subvols_on_filesystem: {len(subvols)=}')
 		return Res(subvols)
 
 
@@ -831,7 +843,7 @@ class Bfg:
 		if DB:
 			all = s.all_subvols_from_db()
 			mrcs = set([x['path'] for x in s.most_recent_common_snapshots(all, SUBVOL)])
-			logbfg.info(f"{mrcs=}")
+			logbfg.debug(f"{mrcs=}")
 		else:
 			all = []
 			mrcs = set()
@@ -840,7 +852,7 @@ class Bfg:
 		local_snapshots = sorted(local_snapshots, key=lambda x: x['dt'])
 
 		if len(local_snapshots) == 0:
-			logbfg.info(f"No snapshots found for {SUBVOL}")
+			logbfg.info(f"No snapshots to check for {SUBVOL}")
 			return
 
 		newest = local_snapshots[-1]['path']
@@ -867,6 +879,8 @@ class Bfg:
 					flags += ' (last)'
 				if is_prunable:
 					flags += ' (prunable)'
+				else:
+					flags += ' - keep'
 				logbfg.info(f"  {path}{flags}")
 
 				if is_mrc:
@@ -880,7 +894,7 @@ class Bfg:
 					s._local_cmd(cmd)
 					_prerr(f"Deleted snapshot: {path}")
 
-		_prerr("No more buckets.")
+		_prerr("Done pruning.")
 
 
 	def prune_remote(s, LOCAL_SUBVOL, REMOTE_SUBVOL, DRY_RUN=False):
@@ -907,7 +921,7 @@ class Bfg:
 
 		mrcs = set([x['path'] for x in remote_mrcs])
 
-		logbfg.info(f"{mrcs=}")
+		logbfg.debug(f"{mrcs=}")
 
 
 		remote_snapshots = s.remote_bfg_snapshots(remote_fs_mp, remote_fs_uuid)
@@ -971,7 +985,7 @@ class Bfg:
 		result = []
 
 		p = Path(s.calculate_default_snapshot_parent_dir('remote', Path(REMOTE_SUBVOL)).val)
-		logbfg.info(f"remote_bfg_snapshots: calculate_default_snapshot_parent_dir: {p=}")
+		logbfg.debug(f"remote_bfg_snapshots: calculate_default_snapshot_parent_dir: {p=}")
 
 		for snap in all:
 			path = snap['path']
@@ -981,7 +995,7 @@ class Bfg:
 			if path.parent != p:
 				continue
 			result.append(snap)
-			logbfg.info(f"remote_bfg_snapshots: found {snap['path']}")
+			logbfg.debug(f"remote_bfg_snapshots: found {snap['path']}")
 
 		return result
 
@@ -995,12 +1009,12 @@ class Bfg:
 
 		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
 		fss = s.remote_fs_uuids(all, SUBVOL)
-		logbfg.info(f"{fss=}")
+		logbfg.debug(f"most_recent_common_snapshots: {fss=}")
 
 		for fs_uuid, fs in fss.items():
 			hosts = fs['hosts']
 
-			logbfg.info(f"most_recent_common_snapshots for {fs_uuid=} (hosts:{hosts})....")
+			logbfg.debug(f"most_recent_common_snapshots for {fs_uuid=} (hosts:{hosts})....")
 
 			all2 = []
 			for snap in all:
@@ -1012,16 +1026,16 @@ class Bfg:
 				else:
 					x['machine'] = 'other'
 				all2.append(x)
-				#logbfg.info(f"all2: {x=}")
+				#logbfg.debug(f"all2: {x=}")
 
-			logbfg.info(f"all2: {len(all2)}")
-			logbfg.info(f"_parent_candidates2...")
+			logbfg.debug(f"all2: {len(all2)}")
+			logbfg.debug(f"_parent_candidates2...")
 			candidates = list(s._parent_candidates2(all2, SUBVOL, s._subvol_uuid , ('local', 'remote')))
 
-			logbfg.info(f"shared parents: {len(candidates)}")
+			logbfg.debug(f"shared parents: {len(candidates)}")
 
 			for candidate in candidates:
-				logbfg.info(f"  {candidate['local_uuid']}")
+				logbfg.debug(f"  {candidate['local_uuid']}")
 
 			if len(candidates) > 0:
 				result.append(candidates[0])
@@ -1056,13 +1070,13 @@ class Bfg:
 		Try to figure out shared parents, if not provided, and send SNAPSHOT to the other side.
 		"""
 		snapshot_parent_dir = s.calculate_default_snapshot_parent_dir('remote', Path(REMOTE_SUBVOL)).val
-		logbfg.info(f'mkdir -p {snapshot_parent_dir}')
+		logbfg.debug(f'mkdir -p {snapshot_parent_dir}')
 		s._remote_cmd(['mkdir', '-p', str(snapshot_parent_dir)])
 
 		if PARENT is None:
-			logbfg.info(f'get_subvol...')
+			logbfg.debug(f'get_subvol...')
 			my_uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
-			logbfg.info(f'find_common_parent...')
+			logbfg.debug(f'find_common_parent...')
 			PARENT = s.find_common_parent(SUBVOL, str(snapshot_parent_dir), my_uuid, ('local', 'remote')).val
 			if PARENT is not None:
 				PARENT = PARENT['abspath']
@@ -1137,7 +1151,7 @@ class Bfg:
 
 		# _prerr((str(parents_args)) + ' #...')
 		cmd = shlex.join(s._sudo + ['btrfs', 'send'] + parents_args + [SNAPSHOT]) + target
-		_prerr((cmd) + ' #...')
+		logbtrfs.info(f'local_send: {cmd=} #...')
 		subprocess.check_call(cmd, shell=True)
 
 
@@ -1147,7 +1161,7 @@ class Bfg:
 
 		cmd1 = shlex.split(s._sshstr) + s._sudo + ['btrfs', 'send'] + parents_args + [REMOTE_SNAPSHOT]
 		cmd2 = s._sudo + ['btrfs', 'receive', LOCAL_DIR]
-		_prerr(shlex.join(cmd1) + ' >>|>> ' + shlex.join(cmd2))
+		logbtrfs.info(shlex.join(cmd1) + ' >>|>> ' + shlex.join(cmd2))
 		p1 = subprocess.Popen(
 			cmd1,
 			stdout=subprocess.PIPE)
@@ -1157,19 +1171,20 @@ class Bfg:
 		p1.stdout.close()  # https://www.titanwolf.org/Network/q/91c3c5dd-aa49-4bf4-911d-1bfe5ac304da/y
 		p2.communicate()
 		if p2.returncode != 0:
-			_prerr('exit code ' + str(p2.returncode))
+			loggfg.error('exit code ' + str(p2.returncode))
 			exit(1)
 
 
 
 	def find_common_parent(s, subvolume, remote_subvolume, my_uuid, direction):
-		logbfg.info(f'parent_candidates...')
+		logbfg.debug(f'parent_candidates...')
 		candidates = s.parent_candidates(subvolume, remote_subvolume, my_uuid, direction).val
 		# candidates.sort(key = lambda sv: sv['subvol_id']) # nope, subvol id is a crude approximation. What happens when you snapshot and old ro snapshot? It gets the highest id.
 		if len(candidates) != 0:
 			winner = candidates[0]
 			s._add_abspath(winner)
-			_prerr(f'PICKED COMMON PARENT {winner}.')
+			logbtrfs.debug(f'PICKED COMMON PARENT {winner["abspath"]}.')
+			logbtrfs.debug(f'details: {winner}.')
 			return Res(winner)
 		else:
 			return Res(None)
@@ -1202,7 +1217,7 @@ class Bfg:
 		candidates = []
 		for c in s._parent_candidates(subvolume, remote_subvolume, my_uuid, direction):
 			candidates.append(c)
-			_prerr('shared parent: ' + c['local_uuid'])
+			logbtrfs.debug('shared parent: ' + c['local_uuid'])
 		return Res(candidates)
 
 
@@ -1214,9 +1229,9 @@ class Bfg:
 
 
 	def _parent_candidates(s, subvol_path, remote_subvolume, my_uuid, direction):
-		logbfg.info(f'_get_subvolumes remote...')
+		logbfg.debug(f'_get_subvolumes remote...')
 		remote_subvols = s._get_subvolumes(s._remote_cmd, remote_subvolume, 'remote')
-		logbfg.info(f'_get_subvolumes local...')
+		logbfg.debug(f'_get_subvolumes local...')
 		local_subvols = s._get_subvolumes(s._local_cmd, subvol_path, 'local')
 
 		all_subvols = []
@@ -1260,7 +1275,7 @@ class Bfg:
 			all_subvols2[i['local_uuid']] = i
 			logging.debug('_parent_candidates2:' + json.dumps(i, indent=2, default=datetime_to_json, sort_keys=True))
 
-		logging.info(f'_parent_candidates2 all_subvols: {len(all_subvols)}')
+		logging.debug(f'_parent_candidates2 all_subvols: {len(all_subvols)}')
 		yield from VolWalker(all_subvols2, direction).walk(my_uuid)
 
 

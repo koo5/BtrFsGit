@@ -48,11 +48,11 @@ def get_engine():
 	#return psycopg2.connect(f"dbname={db} user={user} host={host} password={password}")
 
 	conn_str = f"postgresql+psycopg2://{user}:{password}@{host}/{db}" # postgresql://bfg:bfg@hours.internal/bfg
-	logging.getLogger().info(f"Connecting to {conn_str}")
+	logging.getLogger().debug(f"Connecting to {conn_str}")
 	l = logging.getLogger('sqlalchemy').getEffectiveLevel()
 	_engine = create_engine(conn_str, echo=(l < 20))
 	Base.metadata.create_all(_engine)
-	logging.getLogger().info(f"Connected.")
+	logging.getLogger().debug(f"Connected.")
 	return _engine
 
 
