@@ -44,6 +44,7 @@ import logging
 from btrfsgit.bfg_logging import configure_logging
 configure_logging()
 logbtrfs = logging.getLogger('btrfs')
+logbtrfs.setLevel(logging.WARNING)
 logbfg = logging.getLogger('bfg')
 
 
@@ -836,9 +837,9 @@ class Bfg:
 		"""
 
 		logbfg.info(f"Pruning snapshots for {SUBVOL=}")
-		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
+		logbfg.debug(f'{DB=} {DRY_RUN=}'
 
-		print(DB)
+		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
 
 		if DB:
 			all = s.all_subvols_from_db()
@@ -884,7 +885,7 @@ class Bfg:
 				logbfg.info(f"  {path}{flags}")
 
 				if is_mrc:
-					logbfg.info(f"this is the most recent common snapshot as calculated from db, stopping here.")
+					logbfg.debug(f"this is the most recent common snapshot as calculated from db, stopping here.")
 					return
 
 				if is_prunable and not DRY_RUN:
