@@ -837,7 +837,7 @@ class Bfg:
 		"""
 
 		logbfg.info(f"Pruning snapshots for {SUBVOL=}")
-		logbfg.debug(f'{DB=} {DRY_RUN=}'
+		logbfg.debug(f'{DB=} {DRY_RUN=}')
 
 		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
 
