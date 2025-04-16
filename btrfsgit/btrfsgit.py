@@ -540,16 +540,14 @@ class Bfg:
 
 
 	def parse_snapshot_name(s, dname):
-		# Typical pattern might be:
-		#   <subvol>_bfg_snapshots_<timestamp>_<tag>
-		#   <subvol>_<timestamp>_<tag>
-		# We'll attempt to capture all via two regex tries:
+		# Expected pattern: <subvolbasename>_<timestamp>_<tag>
+		# Example: mydata_2025-04-16_10-30-00_from_myhost
 
-		m = re.match(r'(.+)_bfg_snapshots_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
+		# Regex captures: 1: subvolbasename, 2: timestamp, 3: tag
+		m = re.match(r'(.+)_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
 		if m is None:
-			m = re.match(r'(.+)_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
-		if m is None:
-			raise Exception(f'could not parse snapshot folder: {dname}')
+			logbfg.error(f"Could not parse snapshot name format: {dname}")
+			raise ValueError(f'Could not parse snapshot name format: {dname}')
 		return (
 			{'name': m.group(1),
 			 'dt': datetime.strptime(m.group(2), "%Y-%m-%d_%H-%M-%S"),
@@ -623,12 +621,12 @@ class Bfg:
 				TAG = 'from_' + s.host
 			name = ts + '_' + TAG
 
-		# Use '_' to join parent dir, subvol name, and snapshot name part
-		# The 'parent' already includes the subvol basename from calculate_default_snapshot_parent_dir
-		# No, calculate_default_snapshot_parent_dir now returns only up to .bfg_snapshots
-		# So, we need parent + subvol_basename + snapshot_name_part
-		subvol_basename = Path(SUBVOL).parts[-1]
-		res = Res(str(Path(str(parent) + '/' + subvol_basename + '_' + name)))
+		# Construct the final snapshot path:
+		# parent dir / (subvol_basename + _ + timestamp_tag)
+		# e.g., /path/to/.bfg_snapshots / mydata_2025-04-16_10-30-00_from_myhost
+		subvol_basename = Path(SUBVOL).name
+		snapshot_filename = f"{subvol_basename}_{name}"
+		res = Res(str(Path(parent) / snapshot_filename))
 		return res
 
 
@@ -988,10 +986,23 @@ class Bfg:
 
 
 	def local_bfg_snapshots(s, all, SUBVOL):
+		""" Filter snapshots from 'all' (typically from DB) that belong to SUBVOL's .bfg_snapshots dir """
 		result = []
+		# Calculate the expected parent directory for this subvolume's snapshots
+		expected_parent_dir = Path(s.calculate_default_snapshot_parent_dir('local', Path(SUBVOL)).val)
+		logbfg.debug(f"local_bfg_snapshots: filtering based on parent dir: {expected_parent_dir=}")
+
 		for snap in all:
-			if snap['parent_uuid'] == s._subvol_uuid and not snap['deleted'] and '.bfg_snapshots' in snap['path'].parts:
+			# Ensure the snapshot's parent directory matches the expected one
+			# Also check parent_uuid to be reasonably sure it's a snapshot *of* SUBVOL,
+			# although parent_uuid can be None for received snapshots.
+			# The primary filter is the directory location.
+			if snap['path'].parent == expected_parent_dir:
+				# Optional stricter check: and snap['parent_uuid'] == s._subvol_uuid
+				logbfg.debug(f"local_bfg_snapshots: added {snap['path']} (parent match)")
 				result.append(snap)
+			else:
+				logbfg.debug(f"local_bfg_snapshots: skipped {snap['path']} (parent mismatch: {snap['path'].parent} != {expected_parent_dir})")
 		return result
 
 
