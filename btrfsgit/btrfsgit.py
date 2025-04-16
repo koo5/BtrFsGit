@@ -535,6 +535,10 @@ class Bfg:
 	def snapshot_dt(s, snapshot):
 		logbfg.debug(f'snapshot_dt {snapshot=}')
 		dname = snapshot['path'].name
+		return s.parse_snapshot_name(dname)['dt']
+
+
+	def parse_snapshot_name(s, dname):
 		# Typical pattern might be:
 		#   <subvol>_bfg_snapshots_<timestamp>_<tag>
 		#   <subvol>_<timestamp>_<tag>
@@ -545,7 +549,11 @@ class Bfg:
 			m = re.match(r'(.+)_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
 		if m is None:
 			raise Exception(f'could not parse snapshot folder: {dname}')
-		return datetime.strptime(m.group(2), "%Y-%m-%d_%H-%M-%S")
+		return (
+			{'name': m.group(1),
+			 'dt': datetime.strptime(m.group(2), "%Y-%m-%d_%H-%M-%S"),
+			 'tags': m.group(3)})
+
 
 
 	def calculate_default_snapshot_parent_dir(s, machine: str, SUBVOL):
@@ -553,7 +561,7 @@ class Bfg:
 		fixme: in fact calculates also the base of the actual directory name now.
 
 		SUBVOL: your subvolume (for example /data).
-		Calculate the default snapshot parent dir. In the filesystem tree, it is on the same level as your subvolume, for example `/.bfg_snapshots.data`, if that is still the same filesystem.
+		Calculate the default snapshot parent dir. In the filesystem tree, it is on the same level as your subvolume, for example `/.bfg_snapshots/`, if that is still the same filesystem.
 		"""
 		SUBVOL = Path(SUBVOL)
 		parent = SUBVOL.parent
