@@ -173,6 +173,20 @@ class Bfg:
 			return True
 		return prompt(msg, dry_run)
 
+
+	def _validate_snapshot_args(s, TAG, SNAPSHOT, SNAPSHOT_NAME):
+		"""Helper to validate mutually exclusive snapshot naming arguments."""
+		if TAG and SNAPSHOT:
+			_prerr(f'Error: Please specify SNAPSHOT or TAG, not both.')
+			sys.exit(1)
+		if TAG and SNAPSHOT_NAME:
+			_prerr(f'Error: Please specify SNAPSHOT_NAME or TAG, not both.')
+			sys.exit(1)
+		if SNAPSHOT and SNAPSHOT_NAME:
+			_prerr(f'Error: Please specify SNAPSHOT_NAME or SNAPSHOT, not both.')
+			sys.exit(1)
+
+
 	"""
 
 	helper functions for running subprocessess locally and over ssh
@@ -516,15 +530,7 @@ class Bfg:
 
 
 	def _figure_out_snapshot_name(s, SUBVOL, TAG, SNAPSHOT, SNAPSHOT_NAME):
-		if TAG and SNAPSHOT:
-			_prerr(f'please specify SNAPSHOT or TAG, not both')
-			sys.exit(-1)
-		if TAG and SNAPSHOT_NAME:
-			_prerr(f'please specify SNAPSHOT_NAME or TAG, not both')
-			sys.exit(-1)
-		if SNAPSHOT and SNAPSHOT_NAME:
-			_prerr(f'please specify SNAPSHOT_NAME or SNAPSHOT, not both')
-			sys.exit(-1)
+		s._validate_snapshot_args(TAG, SNAPSHOT, SNAPSHOT_NAME)
 
 		if SNAPSHOT is not None:
 			SNAPSHOT = Path(SNAPSHOT).absolute()
@@ -1071,15 +1077,8 @@ class Bfg:
 
 
 	def remote_commit(s, REMOTE_SUBVOL, TAG=None, SNAPSHOT=None, SNAPSHOT_NAME=None):
-		if TAG and SNAPSHOT:
-			_prerr(f'please specify SNAPSHOT or TAG, not both')
-			return -1
-		if TAG and SNAPSHOT_NAME:
-			_prerr(f'please specify SNAPSHOT_NAME or TAG, not both')
-			return -1
-		if SNAPSHOT and SNAPSHOT_NAME:
-			_prerr(f'please specify SNAPSHOT_NAME or SNAPSHOT, not both')
-			return -1
+		s._validate_snapshot_args(TAG, SNAPSHOT, SNAPSHOT_NAME)
+
 		if SNAPSHOT is not None:
 			SNAPSHOT = Path(SNAPSHOT).absolute()
 		else:
