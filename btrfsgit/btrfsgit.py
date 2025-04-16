@@ -1003,8 +1003,7 @@ class Bfg:
 			# Also check parent_uuid to be reasonably sure it's a snapshot *of* SUBVOL,
 			# although parent_uuid can be None for received snapshots.
 			# The primary filter is the directory location.
-			if snap['path'].parent == expected_parent_dir:
-				# Optional stricter check: and snap['parent_uuid'] == s._subvol_uuid
+			if snap['path'].parent == expected_parent_dir and snap['parent_uuid'] == s._subvol_uuid:
 				logbfg.debug(f"local_bfg_snapshots: added {snap['path']} (parent match)")
 				result.append(snap)
 			else:
