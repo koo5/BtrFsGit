@@ -17,9 +17,10 @@ the missing abstraction that would link a received snapshot to the (optional) ta
 - or to rely on naming conventions, which is what we do here
 
 snapshot naming conventions:
-- a fix is needed to produce subdirectories even for the local case.
-- the name itself should ideally be the full path (relative to id5 mount point), with slashes replaced by something you're not likely to find in a directory name (some unicode?), or the actual character should be escaped.
-- the path should always be something like .bfg_snapshots/<subvol>/<snapshot>, to solve the previous point
+- Snapshots are stored directly under a `.bfg_snapshots` directory.
+- This directory is located either alongside the subvolume being snapshotted (e.g., `/parent/.bfg_snapshots/`) or inside it if the subvolume is the filesystem root (e.g., `/mnt/myfs/.bfg_snapshots/`).
+- The snapshot name itself incorporates the original subvolume's base name, a timestamp, and a tag, joined by underscores (e.g., `subvolbasename_YYYY-MM-DD_HH-MM-SS_tag`).
+- Example path: `/parent/.bfg_snapshots/data_2025-04-16_10-30-00_from_myhost`
 
 pruning:
 - pruning should work even when the remote machine is offline,
@@ -598,8 +599,8 @@ class Bfg:
 				snapshot_parent_dir = SUBVOL
 			runner(['rm', SUBVOL / f1])
 
-		r = str(Path(
-			str(snapshot_parent_dir) + '/.bfg_snapshots/' + Path(SUBVOL).parts[-1]).absolute())
+		# Return path only up to .bfg_snapshots, the subvol name is part of the snapshot name itself
+		r = str(Path(str(snapshot_parent_dir) + '/.bfg_snapshots').absolute())
 		logging.getLogger('utils').debug(f'calculate_default_snapshot_parent_dir: {SUBVOL=} -> {r=}')
 		return Res(r)
 
@@ -622,8 +623,12 @@ class Bfg:
 				TAG = 'from_' + s.host
 			name = ts + '_' + TAG
 
-		# Use '/' to create the desired nested structure: .bfg_snapshots/<subvol>/<snapshot>
-		res = Res(str(Path(parent) / name))
+		# Use '_' to join parent dir, subvol name, and snapshot name part
+		# The 'parent' already includes the subvol basename from calculate_default_snapshot_parent_dir
+		# No, calculate_default_snapshot_parent_dir now returns only up to .bfg_snapshots
+		# So, we need parent + subvol_basename + snapshot_name_part
+		subvol_basename = Path(SUBVOL).parts[-1]
+		res = Res(str(Path(str(parent) + '/' + subvol_basename + '_' + name)))
 		return res
 
 
@@ -995,17 +1000,17 @@ class Bfg:
 		result = []
 
 		p = Path(s.calculate_default_snapshot_parent_dir('remote', Path(REMOTE_SUBVOL)).val)
-		logbfg.debug(f"remote_bfg_snapshots: calculate_default_snapshot_parent_dir: {p=}")
+		logbfg.debug(f"remote_bfg_snapshots: filtering based on parent dir: {p=}")
 
 		for snap in all:
 			path = snap['path']
-			logbfg.debug(f"remote_bfg_snapshots {path=}")
-			if not '.bfg_snapshots' in path.parts:
-				continue
-			if path.parent != p:
-				continue
-			result.append(snap)
-			logbfg.debug(f"remote_bfg_snapshots: found {snap['path']}")
+			logbfg.debug(f"remote_bfg_snapshots checking {path=}")
+			# Ensure the snapshot is directly inside the calculated .bfg_snapshots directory
+			if path.parent == p:
+				result.append(snap)
+				logbfg.debug(f"remote_bfg_snapshots: added {snap['path']}")
+			else:
+				logbfg.debug(f"remote_bfg_snapshots: skipped {snap['path']} (parent mismatch: {path.parent} != {p})")
 
 		return result
 
@@ -1093,8 +1098,12 @@ class Bfg:
 
 		s.local_send(SNAPSHOT, ' | ' + s._sshstr + ' ' + s._sudo[0] + " btrfs receive " + str(snapshot_parent_dir), PARENT,
 					 CLONESRCS)
-		_prerr(f'DONE, \n\tpushed {SNAPSHOT} \n\tinto {snapshot_parent_dir}\n.')
-		return Res(str(snapshot_parent_dir) + '/' + Path(SNAPSHOT).parts[-1])
+		# Construct the final remote path using the same logic as calculate_default_snapshot_path
+		# (parent dir + '/' + snapshot basename)
+		# The snapshot basename already contains the subvol name and timestamp/tag.
+		remote_snapshot_path = str(Path(snapshot_parent_dir) / Path(SNAPSHOT).name)
+		_prerr(f'DONE, \n\tpushed {SNAPSHOT} \n\tinto {remote_snapshot_path}\n.')
+		return Res(remote_snapshot_path)
 
 
 
@@ -1110,10 +1119,13 @@ class Bfg:
 
 		s.remote_send(REMOTE_SNAPSHOT, local_snapshot_parent_dir, PARENT, CLONESRCS)
 
-		local_snapshot = str(local_snapshot_parent_dir) + '/' + Path(REMOTE_SNAPSHOT).parts[-1]
+		# Construct the final local path using the same logic as calculate_default_snapshot_path
+		# (parent dir + '/' + snapshot basename)
+		# The snapshot basename already contains the subvol name and timestamp/tag.
+		local_snapshot_path = str(Path(local_snapshot_parent_dir) / Path(REMOTE_SNAPSHOT).name)
 
-		_prerr(f'DONE, \n\tpulled {REMOTE_SNAPSHOT} \n\tinto {local_snapshot}\n.')
-		return Res(local_snapshot)
+		_prerr(f'DONE, \n\tpulled {REMOTE_SNAPSHOT} \n\tinto {local_snapshot_path}\n.')
+		return Res(local_snapshot_path)
 
 
 
