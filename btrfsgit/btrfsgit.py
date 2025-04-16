@@ -622,7 +622,8 @@ class Bfg:
 				TAG = 'from_' + s.host
 			name = ts + '_' + TAG
 
-		res = Res(str(Path(str(parent) + '_' + name)))
+		# Use '/' to create the desired nested structure: .bfg_snapshots/<subvol>/<snapshot>
+		res = Res(str(Path(parent) / name))
 		return res
 
 
