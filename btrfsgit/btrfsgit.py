@@ -58,7 +58,9 @@ import subprocess
 import fire
 import shlex  # python 3.8 required (for shlex.join)
 from typing import List, Optional
-from .volwalker import *
+# from .volwalker import * # Replaced by Prolog script
+import subprocess # Added for calling Prolog
+import json # Added for passing data to Prolog
 from collections import defaultdict
 import re
 from datetime import datetime
@@ -1355,8 +1357,58 @@ class Bfg:
 			all_subvols2[i['local_uuid']] = i
 			logging.debug('_parent_candidates2:' + json.dumps(i, indent=2, default=datetime_to_json, sort_keys=True))
 
-		logging.debug(f'_parent_candidates2 all_subvols: {len(all_subvols)}')
-		yield from VolWalker(all_subvols2, direction).walk(my_uuid)
+		logging.debug(f'_parent_candidates2 all_subvols: {len(all_subvols2)}')
+
+		# Prepare data for Prolog script
+		source_uuid = my_uuid
+		source_machine = direction[0]
+		target_machine = direction[1]
+		# Convert Path objects to strings for JSON serialization
+		serializable_subvols = []
+		for uuid, subvol_data in all_subvols2.items():
+			data_copy = subvol_data.copy()
+			if 'path' in data_copy and isinstance(data_copy['path'], Path):
+				data_copy['path'] = str(data_copy['path'])
+			serializable_subvols.append(data_copy)
+
+		json_data = json.dumps(serializable_subvols, default=datetime_to_json)
+
+		# Construct the command to run the Prolog script
+		script_path = Path(__file__).parent / 'volwalker2.pl'
+		cmd = ['swipl', str(script_path), source_uuid, source_machine, target_machine, json_data]
+		logbfg.debug(f"Running Prolog script: {' '.join(cmd[:5])} <JSON_DATA>") # Avoid logging large JSON
+
+		try:
+			# Run the Prolog script
+			result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+			logbfg.debug(f"Prolog script stdout:\n{result.stdout}")
+			logbfg.debug(f"Prolog script stderr:\n{result.stderr}")
+
+			# Parse the output (one candidate UUID per line)
+			candidate_uuids = result.stdout.strip().splitlines()
+			logbfg.info(f"Prolog script found {len(candidate_uuids)} candidate parent UUIDs.")
+
+			# Yield the corresponding subvolume dictionaries from our map
+			for uuid in candidate_uuids:
+				if uuid in all_subvols2:
+					logbfg.debug(f"Yielding candidate: {uuid}")
+					yield all_subvols2[uuid]
+				else:
+					logbfg.warning(f"Prolog returned UUID {uuid} which is not in the initial subvolume map.")
+
+		except FileNotFoundError:
+			logbfg.error(f"Error: 'swipl' command not found. Is SWI-Prolog installed and in PATH?")
+			raise
+		except subprocess.CalledProcessError as e:
+			logbfg.error(f"Error running Prolog script: {e}")
+			logbfg.error(f"Command: {' '.join(cmd[:5])} <JSON_DATA>")
+			logbfg.error(f"Return code: {e.returncode}")
+			logbfg.error(f"Stdout: {e.stdout}")
+			logbfg.error(f"Stderr: {e.stderr}")
+			raise
+		except Exception as e:
+			logbfg.error(f"An unexpected error occurred while running/parsing Prolog script: {e}")
+			raise
 
 
 
