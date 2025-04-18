@@ -1115,44 +1115,44 @@ class Bfg:
 		return Res(remote_snapshot_path)
 
 
-	def transfer_snapshot(s, LOCAL_SNAPSHOT_PATH, REMOTE_PARENT_DIR, PARENT=None, CLONESRCS=[]):
+	def transfer_snapshot(s, SNAPSHOT, REMOTE_PARENT_DIR, PARENT=None, CLONESRCS=[]):
 		"""
 		Transfer a specific local snapshot to a remote directory, figuring out the common parent.
 
-		:param LOCAL_SNAPSHOT_PATH: Filesystem path to the existing local snapshot to send.
+		:param SNAPSHOT: Filesystem path to the existing local snapshot to send.
 		:param REMOTE_PARENT_DIR: Filesystem path to the parent directory on the remote machine
 								  where the snapshot should be received (e.g., /backup/.bfg_snapshots).
 		:param PARENT: Optional: Explicitly specify the parent snapshot path for the send operation.
 		:param CLONESRCS: Optional: List of clone source paths for the send operation.
 		:return: Filesystem path of the snapshot created on the other machine.
 		"""
-		LOCAL_SNAPSHOT_PATH = Path(LOCAL_SNAPSHOT_PATH).absolute()
+		SNAPSHOT = Path(SNAPSHOT).absolute()
 		REMOTE_PARENT_DIR = Path(REMOTE_PARENT_DIR)
 
-		logbfg.debug(f'transfer_snapshot: {LOCAL_SNAPSHOT_PATH=} {REMOTE_PARENT_DIR=}')
+		logbfg.debug(f'transfer_snapshot: {SNAPSHOT=} {REMOTE_PARENT_DIR=}')
 
 		# Ensure remote parent directory exists
 		logbfg.debug(f'mkdir -p {REMOTE_PARENT_DIR}')
 		s._remote_cmd(['mkdir', '-p', str(REMOTE_PARENT_DIR)])
 
 		if PARENT is None:
-			logbfg.debug(f'get_subvol for local snapshot {LOCAL_SNAPSHOT_PATH}...')
+			logbfg.debug(f'get_subvol for local snapshot {SNAPSHOT}...')
 			# Use get_local_subvol which handles the 'local' machine context
-			my_uuid = s.get_local_subvol(LOCAL_SNAPSHOT_PATH)['local_uuid']
+			my_uuid = s.get_local_subvol(SNAPSHOT)['local_uuid']
 			logbfg.debug(f'find_common_parent using local snapshot path and remote parent dir...')
 			# Pass LOCAL_SNAPSHOT_PATH as the 'local subvolume context' and REMOTE_PARENT_DIR as the 'remote subvolume context'
 			# This assumes find_common_parent/parent_candidates can work with these potentially disparate paths
 			# by fetching subvolume lists rooted appropriately.
-			PARENT = s.find_common_parent(str(LOCAL_SNAPSHOT_PATH), str(REMOTE_PARENT_DIR), my_uuid, ('local', 'remote')).val
+			PARENT = s.find_common_parent(str(SNAPSHOT), str(REMOTE_PARENT_DIR), my_uuid, ('local', 'remote')).val
 			if PARENT is not None:
 				PARENT = PARENT['abspath'] # Use the absolute path determined by find_common_parent
 
-		logbfg.info(f"Sending {LOCAL_SNAPSHOT_PATH} to {REMOTE_PARENT_DIR} with parent {PARENT}")
-		s.local_send(str(LOCAL_SNAPSHOT_PATH), ' | ' + s._sshstr + ' ' + s._sudo[0] + " btrfs receive " + str(REMOTE_PARENT_DIR), PARENT, CLONESRCS)
+		logbfg.info(f"Sending {SNAPSHOT} to {REMOTE_PARENT_DIR} with parent {PARENT}")
+		s.local_send(str(SNAPSHOT), ' | ' + s._sshstr + ' ' + s._sudo[0] + " btrfs receive " + str(REMOTE_PARENT_DIR), PARENT, CLONESRCS)
 
 		# Construct the final remote path
-		remote_snapshot_path = str(REMOTE_PARENT_DIR / LOCAL_SNAPSHOT_PATH.name)
-		_prerr(f'DONE, \n\ttransferred {LOCAL_SNAPSHOT_PATH} \n\tinto {remote_snapshot_path}\n.')
+		remote_snapshot_path = str(REMOTE_PARENT_DIR / SNAPSHOT.name)
+		_prerr(f'DONE, \n\ttransferred {SNAPSHOT} \n\tinto {remote_snapshot_path}\n.')
 		return Res(remote_snapshot_path)
 
 
@@ -1338,6 +1338,7 @@ class Bfg:
 					logging.warning('duplicate subvols:')
 					logging.warning(json.dumps(i, indent=2, default=datetime_to_json, sort_keys=True))
 					logging.warning(json.dumps(all_subvols2[i['local_uuid']], indent=2, default=datetime_to_json, sort_keys=True))
+					continue
 					raise 'wut'
 
 			# if not Path('.bfg_snapshots') in Path(i['path']).parts:
