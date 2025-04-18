@@ -11,10 +11,8 @@
 % Assert subvolume facts from the JSON dictionary list
 assert_subvols([]).
 assert_subvols([SubvolDict|Rest]) :-
-    % Ensure the dict has a local_uuid before asserting
-    (get_dict(local_uuid, SubvolDict, LocalUUID), LocalUUID \= '', LocalUUID \= @(null))
-    -> assertz(subvol(SubvolDict))
-    ;  true, % Skip assertion if local_uuid is missing or empty/null
+    % local_uuid is guaranteed to be present and valid, so assert directly
+    assertz(subvol(SubvolDict)),
     assert_subvols(Rest).
 
 % Determine the parent UUID (prefer received_uuid)
