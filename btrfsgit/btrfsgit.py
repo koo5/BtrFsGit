@@ -1253,10 +1253,15 @@ class Bfg:
 	def find_common_parent(s, subvolume, remote_subvolume, my_uuid, direction):
 		logbfg.debug(f'parent_candidates...')
 		candidates = s.parent_candidates(subvolume, remote_subvolume, my_uuid, direction).val
-		# candidates.sort(key = lambda sv: sv['subvol_id']) # nope, subvol id is a crude approximation. What happens when you snapshot and old ro snapshot? It gets the highest id.
+
 		if len(candidates) != 0:
+			# Sort candidates by subvolume ID descending to pick the most recent common ancestor.
+			# While subvol_id isn't perfect (e.g., snapshotting an old RO snapshot gives it a high ID),
+			# it's often a better heuristic than generation or taking the first arbitrary result from the walk.
+			candidates.sort(key=lambda sv: sv['subvol_id'], reverse=True)
 			winner = candidates[0]
 			s._add_abspath(winner)
+			logbtrfs.info(f'Found {len(candidates)} potential common parents. Picked candidate with highest subvol_id.')
 			logbtrfs.debug(f'PICKED COMMON PARENT {winner["abspath"]}.')
 			logbtrfs.debug(f'details: {winner}.')
 			return Res(winner)
