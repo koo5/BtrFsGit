@@ -4,69 +4,71 @@
 
 :- use_module(library(main)).
 :- use_module(library(http/json)).
-:- use_module(library(dict_schema)). % For accessing nested dict keys safely
-
 % Define dynamic predicates to store subvolume info
-:- dynamic subvol/6. % subvol(LocalUUID, ParentUUID, ReceivedUUID, IsRO, Machine, SubvolID).
+:- dynamic subvol/1. % subvol(Dict). Stores the subvolume dict directly.
 :- dynamic candidate/1. % candidate(UUID).
-
-% Helper to safely get a value from a dict, returning default if key missing or value is null
-safe_get(Dict, Key, Default, Value) :-
-    (get_dict(Key, Dict, RawValue), RawValue \= @(null))
-    -> Value = RawValue
-    ;  Value = Default.
 
 % Assert subvolume facts from the JSON dictionary list
 assert_subvols([]).
 assert_subvols([SubvolDict|Rest]) :-
-    safe_get(SubvolDict, local_uuid, '', LocalUUID),
-    safe_get(SubvolDict, parent_uuid, '', ParentUUID),
-    safe_get(SubvolDict, received_uuid, '', ReceivedUUID),
-    safe_get(SubvolDict, ro, false, IsRO), % Default to false if missing
-    safe_get(SubvolDict, machine, '', Machine),
-    safe_get(SubvolDict, subvol_id, -1, SubvolID), % Default to -1 if missing
-    (LocalUUID \= '' -> % Only assert if we have a valid UUID
-        assertz(subvol(LocalUUID, ParentUUID, ReceivedUUID, IsRO, Machine, SubvolID))
-    ; true),
+    % Ensure the dict has a local_uuid before asserting
+    (get_dict(local_uuid, SubvolDict, LocalUUID), LocalUUID \= '', LocalUUID \= @(null))
+    -> assertz(subvol(SubvolDict))
+    ;  true, % Skip assertion if local_uuid is missing or empty/null
     assert_subvols(Rest).
 
 % Determine the parent UUID (prefer received_uuid)
 parent_uuid(UUID, ParentUUID) :-
-    subvol(UUID, _, ReceivedUUID, _, _, _),
-    ReceivedUUID \= '', % Check if ReceivedUUID is valid
-    !, % Cut: Use ReceivedUUID if it exists
+    subvol(Dict),
+    Dict.local_uuid == UUID, % Find the subvol dict for the given UUID
+    get_dict(received_uuid, Dict, ReceivedUUID), % Check if received_uuid exists and is not empty/null
+    ReceivedUUID \= '', ReceivedUUID \= @(null),
+    !, % Cut: Use ReceivedUUID if it exists and is valid
     ParentUUID = ReceivedUUID.
 parent_uuid(UUID, ParentUUID) :-
-    subvol(UUID, ParentUUID, _, _, _, _),
-    ParentUUID \= ''. % Use ParentUUID if ReceivedUUID is not valid
+    subvol(Dict),
+    Dict.local_uuid == UUID, % Find the subvol dict
+    get_dict(parent_uuid, Dict, ParentUUIDValue), % Check if parent_uuid exists and is not empty/null
+    ParentUUIDValue \= '', ParentUUIDValue \= @(null),
+    !, % Cut: Use ParentUUID if it exists and is valid
+    ParentUUID = ParentUUIDValue.
+% If neither received_uuid nor parent_uuid is valid, parent_uuid/2 fails for this UUID.
 
 % Walk up the parent chain
 walk(UUID, SourceMachine, TargetMachine) :-
-    subvol(UUID, _, _, _, _, _), % Ensure the UUID exists in our facts
+    subvol(Dict), Dict.local_uuid == UUID, % Find the subvol dict for the UUID
     !, % Don't backtrack into finding the subvol fact again
     (
         % Check if this UUID is a potential candidate itself
-        is_ro_on_machine(UUID, SourceMachine),
-        has_ro_descendant_on_machine(UUID, TargetMachine),
+        is_ro_on_machine(Dict, SourceMachine), % Pass the Dict
+        has_ro_descendant_on_machine(UUID, TargetMachine), % UUID is enough here
         \+ candidate(UUID), % Avoid duplicates
         assertz(candidate(UUID)) % Found a candidate
     ;
         % Otherwise, continue walking up the parent chain
         (parent_uuid(UUID, Parent), walk(Parent, SourceMachine, TargetMachine))
     ).
-walk(_, _, _). % Stop if UUID doesn't exist or has no parent
+walk(_, _, _). % Stop if UUID doesn't exist in subvol facts or has no valid parent
 
 % Check if a subvolume is read-only and on the specified machine
-is_ro_on_machine(UUID, Machine) :-
-    subvol(UUID, _, _, true, Machine, _). % IsRO must be true
+is_ro_on_machine(Dict, Machine) :-
+    get_dict(ro, Dict, true), % Check if 'ro' key exists and is true
+    get_dict(machine, Dict, Machine). % Check if 'machine' key exists and matches
 
 % Check if a subvolume has any read-only descendant (including itself) on the target machine
 has_ro_descendant_on_machine(UUID, TargetMachine) :-
-    is_ro_on_machine(UUID, TargetMachine),
+    subvol(Dict), Dict.local_uuid == UUID,
+    is_ro_on_machine(Dict, TargetMachine), % Check if the current one matches
     !. % Found one, cut
 has_ro_descendant_on_machine(UUID, TargetMachine) :-
-    % Find children (snapshot or received)
-    (subvol(ChildUUID, UUID, '', _, _, _) ; subvol(ChildUUID, '', UUID, _, _, _)),
+    % Find children (snapshot or received) by iterating through all subvols
+    subvol(ChildDict),
+    (
+        (get_dict(parent_uuid, ChildDict, UUID), UUID \= '', UUID \= @(null)) % Child is a snapshot of UUID
+    ;
+        (get_dict(received_uuid, ChildDict, UUID), UUID \= '', UUID \= @(null)) % Child was received from UUID
+    ),
+    ChildUUID = ChildDict.local_uuid,
     has_ro_descendant_on_machine(ChildUUID, TargetMachine).
 
 % Main predicate called from command line
@@ -85,27 +87,31 @@ main(Argv) :-
     % Start the walk from the source UUID
     walk(SourceUUID, SourceMachine, TargetMachine),
 
-    % Retrieve and print candidates (sorted by SubvolID descending)
-    findall(UUID-SubvolID, (candidate(UUID), subvol(UUID,_,_,_,_,SubvolID)), CandidatesWithID),
-    keysort(CandidatesWithID, SortedCandidatesWithID), % Sorts by key (UUID) - need to sort by SubvolID
-    predsort(compare_subvol_id_desc, CandidatesWithID, SortedBySubvolID),
+    % Retrieve candidate UUIDs and their corresponding Dicts
+    findall(UUID-Dict, (candidate(UUID), subvol(Dict), Dict.local_uuid == UUID), CandidatesWithDict),
 
-    print_candidates(SortedBySubvolID),
+    % Sort candidates by SubvolID descending (handle missing subvol_id)
+    predsort(compare_subvol_id_desc, CandidatesWithDict, SortedCandidates),
+
+    print_candidates(SortedCandidates),
     halt(0). % Exit successfully
 
 main(_) :-
     write('Usage: swipl volwalker2.pl <SourceUUID> <SourceMachine> <TargetMachine> <JSON_Subvols_Data>\n'),
     halt(1). % Exit with error
 
-% Comparator for sorting by SubvolID descending
-compare_subvol_id_desc(Order, _-ID1, _-ID2) :-
+% Comparator for sorting UUID-Dict pairs by SubvolID descending
+% Handles cases where subvol_id might be missing, treating them as lowest priority (-1)
+compare_subvol_id_desc(Order, _-Dict1, _-Dict2) :-
+    (get_dict(subvol_id, Dict1, ID1Value) -> ID1 = ID1Value ; ID1 = -1),
+    (get_dict(subvol_id, Dict2, ID2Value) -> ID2 = ID2Value ; ID2 = -1),
     compare(OrderNum, ID2, ID1), % Note the reversed order for descending sort
-    (OrderNum = 0 -> Order = (=) ; OrderNum = 1 -> Order = (>) ; Order = (<)).
+    (OrderNum == 0 -> Order = (=) ; OrderNum == 1 -> Order = (>) ; Order = (<)).
 
 
 % Print candidate UUIDs, one per line
 print_candidates([]).
-print_candidates([UUID-_|Rest]) :-
+print_candidates([UUID-_Dict|Rest]) :- % Match UUID-Dict pair, ignore Dict
     writeln(UUID),
     print_candidates(Rest).
 
