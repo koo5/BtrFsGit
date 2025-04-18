@@ -312,15 +312,18 @@ class Bfg:
 		else:
 			fs = s.remote_fs_id5_mount_point(subvolume)
 
+		# Always list subvolumes relative to the filesystem root (fs)
+		# to ensure we capture all potential parents, regardless of the input 'subvolume' path.
 		cmd = ['btrfs', 'subvolume', 'list', '-q', '-t', '-R', '-u']
-		for line in command_runner(cmd + [subvolume], logger=logbtrfs).splitlines()[2:]:
+		for line in command_runner(cmd + [str(fs)], logger=logbtrfs).splitlines()[2:]: # Use fs here
 			subvol = s._make_snapshot_struct_from_sub_list_output_line(fs, line)
 			subvol['src'] = src + '_btrfs'
 			logger.debug(subvol)
 			subvols.append(subvol)
 
 		ro_subvols = set()
-		for line in command_runner(cmd + ['-r', subvolume], logger=logbtrfs).splitlines()[2:]:
+		# Also list read-only subvolumes relative to the filesystem root (fs).
+		for line in command_runner(cmd + ['-r', str(fs)], logger=logbtrfs).splitlines()[2:]: # Use fs here
 			subvol = s._make_snapshot_struct_from_sub_list_output_line(fs, line)
 			ro_subvols.add(subvol['local_uuid'])
 		# _prerr(str(ro_subvols))
