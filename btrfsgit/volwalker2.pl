@@ -19,14 +19,9 @@ assert_subvols([SubvolDict|Rest]) :-
 parent_uuid(UUID, ParentUUID) :-
     subvol(Dict),
     Dict.local_uuid == UUID, % Find the subvol dict for the given UUID
-    get_dict(received_uuid, Dict, ParentUUID), % Check if received_uuid exists
-    !. % Cut: Use ReceivedUUID if it exists
-parent_uuid(UUID, ParentUUID) :-
-    subvol(Dict),
-    Dict.local_uuid == UUID, % Find the subvol dict
-    get_dict(parent_uuid, Dict, ParentUUID), % Check if parent_uuid exists
-    !. % Cut: Use ParentUUID if it exists
-% If neither received_uuid nor parent_uuid exists, parent_uuid/2 fails for this UUID.
+    ( get_dict(received_uuid, Dict, ParentUUID)
+    ;
+    get_dict(parent_uuid, Dict, ParentUUID)).
 
 % Walk up the parent chain
 walk(UUID, SourceMachine, TargetMachine) :-
