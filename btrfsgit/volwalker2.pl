@@ -19,18 +19,14 @@ assert_subvols([SubvolDict|Rest]) :-
 parent_uuid(UUID, ParentUUID) :-
     subvol(Dict),
     Dict.local_uuid == UUID, % Find the subvol dict for the given UUID
-    get_dict(received_uuid, Dict, ReceivedUUID), % Check if received_uuid exists and is not empty/null
-    ReceivedUUID \= '', ReceivedUUID \= @(null),
-    !, % Cut: Use ReceivedUUID if it exists and is valid
-    ParentUUID = ReceivedUUID.
+    get_dict(received_uuid, Dict, ParentUUID), % Check if received_uuid exists
+    !. % Cut: Use ReceivedUUID if it exists
 parent_uuid(UUID, ParentUUID) :-
     subvol(Dict),
     Dict.local_uuid == UUID, % Find the subvol dict
-    get_dict(parent_uuid, Dict, ParentUUIDValue), % Check if parent_uuid exists and is not empty/null
-    ParentUUIDValue \= '', ParentUUIDValue \= @(null),
-    !, % Cut: Use ParentUUID if it exists and is valid
-    ParentUUID = ParentUUIDValue.
-% If neither received_uuid nor parent_uuid is valid, parent_uuid/2 fails for this UUID.
+    get_dict(parent_uuid, Dict, ParentUUID), % Check if parent_uuid exists
+    !. % Cut: Use ParentUUID if it exists
+% If neither received_uuid nor parent_uuid exists, parent_uuid/2 fails for this UUID.
 
 % Walk up the parent chain
 walk(UUID, SourceMachine, TargetMachine) :-
@@ -62,9 +58,9 @@ has_ro_descendant_on_machine(UUID, TargetMachine) :-
     % Find children (snapshot or received) by iterating through all subvols
     subvol(ChildDict),
     (
-        (get_dict(parent_uuid, ChildDict, UUID), UUID \= '', UUID \= @(null)) % Child is a snapshot of UUID
+        get_dict(parent_uuid, ChildDict, UUID) % Child is a snapshot of UUID
     ;
-        (get_dict(received_uuid, ChildDict, UUID), UUID \= '', UUID \= @(null)) % Child was received from UUID
+        get_dict(received_uuid, ChildDict, UUID) % Child was received from UUID
     ),
     ChildUUID = ChildDict.local_uuid,
     has_ro_descendant_on_machine(ChildUUID, TargetMachine).
@@ -78,7 +74,7 @@ main(Argv) :-
     atom_json_dict(JsonData, SubvolsList, []),
 
     % Clean up previous facts and assert new ones
-    retractall(subvol(_,_,_,_,_,_)),
+    retractall(subvol(_)),
     retractall(candidate(_)),
     assert_subvols(SubvolsList),
 
