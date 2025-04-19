@@ -1,22 +1,24 @@
 #!/usr/bin/env python
-"""Tests for `bfg` package."""
+"""Tests for `btrfsgit` package."""
 # pylint: disable=redefined-outer-name
 
-import pytest
+# import pytest
+# from btrfsgit import btrfsgit
 
+# TODO: Add actual unit tests here
+# Example structure:
+# def test_example_function():
+#     # Setup (if needed)
+#     # Call function
+#     # Assert expected outcome
+#     assert True
 
-@pytest.fixture
-def response():
-    """Sample pytest fixture.
+# Example fixture:
+# @pytest.fixture
+# def bfg_instance():
+#     """Provides a Bfg instance for testing."""
+#     return btrfsgit.Bfg()
 
-    See more at: http://doc.pytest.org/en/latest/fixture.html
-    """
-    # import requests
-    # return requests.get('https://github.com/audreyr/cookiecutter-pypackage')
-
-
-def test_content(response):
-    """Sample pytest test function with the pytest fixture as an argument."""
-    # from bs4 import BeautifulSoup
-    # assert 'GitHub' in BeautifulSoup(response.content).title.string
-    del response
+# def test_with_fixture(bfg_instance):
+#      assert bfg_instance is not None
+pass # Remove this pass when actual tests are added

@@ -52,13 +52,13 @@ logbfg = logging.getLogger('bfg')
 from sqlalchemy.orm import undefer
 from pathlib import Path
 from pathvalidate import sanitize_filename
-import sys, os
+import sys, os, json
 import time
 import subprocess
 import fire
 import shlex  # python 3.8 required (for shlex.join)
 from typing import List, Optional
-from .volwalker2 import walk
+from .volwalker2 import common_parents
 from collections import defaultdict
 import re
 from datetime import datetime
@@ -1053,7 +1053,7 @@ class Bfg:
 
 		for fs_uuid, fs in fss.items():
 			logbfg.debug(f"most_recent_common_snapshots for {fs_uuid=} (hosts:{fs['hosts']})....")
-			parent = list(s.best_shared_parent(SUBVOL, s._subvol_uuid , fs_uuid))
+			parent = s.best_shared_parent(SUBVOL, s._subvol_uuid , fs_uuid).value
 			if parent:
 				result.append(parent)
 
