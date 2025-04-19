@@ -19,7 +19,7 @@ class VolWalker:
 
 	def parent(s, uuid):
 		v = s.by_uuid[uuid]
-		logging.debug(v)
+		#logging.debug(v)
 		if v['received_uuid']:
 			return v['received_uuid']
 		if v['parent_uuid']:

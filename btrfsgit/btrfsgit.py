@@ -58,9 +58,7 @@ import subprocess
 import fire
 import shlex  # python 3.8 required (for shlex.join)
 from typing import List, Optional
-# from .volwalker import * # Replaced by Prolog script
-import subprocess # Added for calling Prolog
-import json # Added for passing data to Prolog
+from .volwalker2 import walk
 from collections import defaultdict
 import re
 from datetime import datetime
@@ -317,25 +315,31 @@ class Bfg:
 		# Always list subvolumes relative to the filesystem root (fs)
 		# to ensure we capture all potential parents, regardless of the input 'subvolume' path.
 		cmd = ['btrfs', 'subvolume', 'list', '-q', '-t', '-R', '-u']
-		for line in command_runner(cmd + [str(fs)], logger=logbtrfs).splitlines()[2:]: # Use fs here
+		for line in command_runner(cmd + [str(fs)], logger=logbtrfs).splitlines()[2:]:
 			subvol = s._make_snapshot_struct_from_sub_list_output_line(fs, line)
 			subvol['src'] = src + '_btrfs'
-			logger.debug(subvol)
+			logger.debug(f'found {subvol=}')
 			subvols.append(subvol)
 
 		ro_subvols = set()
 		# Also list read-only subvolumes relative to the filesystem root (fs).
-		for line in command_runner(cmd + ['-r', str(fs)], logger=logbtrfs).splitlines()[2:]: # Use fs here
+		for line in command_runner(cmd + ['-r', str(fs)], logger=logbtrfs).splitlines()[2:]:
 			subvol = s._make_snapshot_struct_from_sub_list_output_line(fs, line)
 			ro_subvols.add(subvol['local_uuid'])
-		# _prerr(str(ro_subvols))
+
+		if src == 'local':
+			fs_uuid = s.local_fs_uuid(subvolume)
+			host = s.host
+		else:
+			fs_uuid = s.remote_fs_uuid(subvolume)[0]
+			host = s._remote_cmd('hostname').strip()
 
 		for i in subvols:
+			i['deleted'] = False
 			i['ro'] = i['local_uuid'] in ro_subvols
 			# we should not need this for remote subvolumes:
-			if src == 'local':
-				i['host'] = s.host
-				i['fs_uuid'] = s.local_fs_uuid(subvolume)
+			i['host'] = host
+			i['fs_uuid'] = fs_uuid
 			if '.bfg_snapshots' in i['path'].parts:
 				i['dt'] = s.snapshot_dt(i)
 
@@ -1048,33 +1052,10 @@ class Bfg:
 		logbfg.debug(f"most_recent_common_snapshots: {fss=}")
 
 		for fs_uuid, fs in fss.items():
-			hosts = fs['hosts']
-
-			logbfg.debug(f"most_recent_common_snapshots for {fs_uuid=} (hosts:{hosts})....")
-
-			all2 = []
-			for snap in all:
-				x = dict(snap)
-				if x['fs_uuid'] == s.local_fs_uuid(SUBVOL):
-					x['machine'] = 'local'
-				elif x['fs_uuid'] == fs_uuid:
-					x['machine'] = 'remote'
-				else:
-					x['machine'] = 'other'
-				all2.append(x)
-				#logbfg.debug(f"all2: {x=}")
-
-			logbfg.debug(f"all2: {len(all2)}")
-			logbfg.debug(f"_parent_candidates2...")
-			candidates = list(s._parent_candidates2(all2, SUBVOL, s._subvol_uuid , ('local', 'remote')))
-
-			logbfg.debug(f"shared parents: {len(candidates)}")
-
-			for candidate in candidates:
-				logbfg.debug(f"  {candidate['local_uuid']}")
-
-			if len(candidates) > 0:
-				result.append(candidates[0])
+			logbfg.debug(f"most_recent_common_snapshots for {fs_uuid=} (hosts:{fs['hosts']})....")
+			parent = list(s.best_shared_parent(SUBVOL, s._subvol_uuid , fs_uuid))
+			if parent:
+				result.append(parent)
 
 		return result
 
@@ -1247,7 +1228,7 @@ class Bfg:
 		p1.stdout.close()  # https://www.titanwolf.org/Network/q/91c3c5dd-aa49-4bf4-911d-1bfe5ac304da/y
 		p2.communicate()
 		if p2.returncode != 0:
-			loggfg.error('exit code ' + str(p2.returncode))
+			logbfg.error('exit code ' + str(p2.returncode))
 			exit(1)
 
 
@@ -1293,15 +1274,6 @@ class Bfg:
 			['btrfs', 'ins', 'sub', str(subvol_record['subvol_id']), id5_mp]).strip()
 
 
-
-	def parent_candidates(s, subvolume, remote_subvolume, my_uuid, direction):
-		candidates = []
-		for c in s._parent_candidates(subvolume, remote_subvolume, my_uuid, direction):
-			candidates.append(c)
-			logbtrfs.debug('shared parent: ' + c['local_uuid'])
-		return Res(candidates)
-
-
 	def get_local_subvol(s, subvol_path):
 		toplevel_subvol = s.get_subvol(s._local_cmd, subvol_path).val
 		toplevel_subvol['src'] = 'get_subvol'
@@ -1309,107 +1281,48 @@ class Bfg:
 		return toplevel_subvol
 
 
-	def _parent_candidates(s, subvol_path, remote_subvolume, my_uuid, direction):
+	def parent_candidates(s, subvolume, remote_subvolume, my_uuid, direction):
+		candidates = []
+		for c in s._parent_candidates(subvolume, remote_subvolume, my_uuid, direction):
+			candidates.append(c)
+		return Res(candidates)
+
+
+
+	def _parent_candidates(s, subvol_path, remote_subvolume, my_uuid, target_fs):
+
+		all = {}
+		db = s.all_subvols_from_db()
+
 		logbfg.debug(f'_get_subvolumes remote...')
 		remote_subvols = s._get_subvolumes(s._remote_cmd, remote_subvolume, 'remote')
+
 		logbfg.debug(f'_get_subvolumes local...')
 		local_subvols = s._get_subvolumes(s._local_cmd, subvol_path, 'local')
 
-		all_subvols = []
-		for machine, lst in [
-			('remote', remote_subvols),
-			('local', local_subvols),
-		]:
-			for v in lst:
-				v['machine'] = machine
-				all_subvols.append(v)
-
-		yield from s._parent_candidates2(all_subvols, subvol_path, my_uuid, direction)
-
-
-
-	def _parent_candidates2(s, all_subvols, subvol_path, my_uuid, direction):
-		"""
-		my uuid is the local_uuid of the local rw subvolume that we're trying to transfer to the remote machine.
-		direction is either ('local', 'remote') or ('remote', 'local')
-		"""
-
-		all_subvols2 = {}
-		for i in all_subvols:
-			all_subvols2[i['local_uuid']] = i
-		if my_uuid not in all_subvols2:
-			all_subvols = all_subvols + [s.get_local_subvol(subvol_path)]
-
-		all_subvols2 = {}
-		for i in all_subvols:
-
-			if i['local_uuid'] in all_subvols2:
-				if i != all_subvols2[i['local_uuid']]:
-					logging.warning('duplicate subvols:')
-					logging.warning(json.dumps(i, indent=2, default=datetime_to_json, sort_keys=True))
-					logging.warning(json.dumps(all_subvols2[i['local_uuid']], indent=2, default=datetime_to_json, sort_keys=True))
-					continue
-					raise 'wut'
-
-			# if not Path('.bfg_snapshots') in Path(i['path']).parts:
-			# 	continue
-
-			all_subvols2[i['local_uuid']] = i
-			logging.debug('_parent_candidates2:' + json.dumps(i, indent=2, default=datetime_to_json, sort_keys=True))
-
-		logging.debug(f'_parent_candidates2 all_subvols: {len(all_subvols2)}')
-
-		# Prepare data for Prolog script
-		source_uuid = my_uuid
-		source_machine = direction[0]
-		target_machine = direction[1]
-		# Convert Path objects to strings for JSON serialization
-		serializable_subvols = []
-		for uuid, subvol_data in all_subvols2.items():
-			data_copy = subvol_data.copy()
-			if 'path' in data_copy and isinstance(data_copy['path'], Path):
-				data_copy['path'] = str(data_copy['path'])
-			serializable_subvols.append(data_copy)
-
-		json_data = json.dumps(serializable_subvols, default=datetime_to_json)
-
-		# Construct the command to run the Prolog script
-		script_path = Path(__file__).parent / 'volwalker2.pl'
-		cmd = ['swipl', str(script_path), source_uuid, source_machine, target_machine, json_data]
-		logbfg.debug(f"Running Prolog script: {' '.join(cmd[:5])} <JSON_DATA>") # Avoid logging large JSON
-
-		try:
-			# Run the Prolog script
-			result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-			logbfg.debug(f"Prolog script stdout:\n{result.stdout}")
-			logbfg.debug(f"Prolog script stderr:\n{result.stderr}")
-
-			# Parse the output (one candidate UUID per line)
-			candidate_uuids = result.stdout.strip().splitlines()
-			logbfg.info(f"Prolog script found {len(candidate_uuids)} candidate parent UUIDs.")
-
-			# Yield the corresponding subvolume dictionaries from our map
-			for uuid in candidate_uuids:
-				if uuid in all_subvols2:
-					logbfg.debug(f"Yielding candidate: {uuid}")
-					yield all_subvols2[uuid]
+		for source in [db, local_subvols, remote_subvols]:
+			for x in source:
+				if x['local_uuid'] in all:
+					y = all[x['local_uuid']]
+					for key in ['path', 'parent_uuid', 'subvol_id', 'received_uuid', 'fs_uuid']:
+						if key in x and x[key] != y[key]:
+							logbfg.warning(f'discrepance in sources: {x=}, {y=}')
+							sys.exit(1)
 				else:
-					logbfg.warning(f"Prolog returned UUID {uuid} which is not in the initial subvolume map.")
+					all[x['local_uuid']] = x
 
-		except FileNotFoundError:
-			logbfg.error(f"Error: 'swipl' command not found. Is SWI-Prolog installed and in PATH?")
-			raise
-		except subprocess.CalledProcessError as e:
-			logbfg.error(f"Error running Prolog script: {e}")
-			logbfg.error(f"Command: {' '.join(cmd[:5])} <JSON_DATA>")
-			logbfg.error(f"Return code: {e.returncode}")
-			logbfg.error(f"Stdout: {e.stdout}")
-			logbfg.error(f"Stderr: {e.stderr}")
-			raise
-		except Exception as e:
-			logbfg.error(f"An unexpected error occurred while running/parsing Prolog script: {e}")
-			raise
+		yield from volwalker2.common_parents(all, my_uuid, target_fs)
 
+
+	def best_shared_parent(s, subvol_path, remote_subvolume, my_uuid, target_fs):
+		"""
+		Find the best shared parent for a subvolume and its remote counterpart.
+		"""
+		candidates = list(s._parent_candidates(subvol_path, remote_subvolume, my_uuid, target_fs))
+		if len(candidates) > 0:
+			return Res(candidates[0])
+		else:
+			return Res(None)
 
 
 def main():

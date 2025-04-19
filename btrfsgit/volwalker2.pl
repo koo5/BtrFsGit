@@ -1,86 +1,88 @@
 
-
-
-
 :- use_module(library(main)).
 :- use_module(library(http/json)).
 % Define dynamic predicates to store subvolume info
-% subvol(UUID, FS, ParentUUID, ReceivedUUID, RO)
-% Optional fields (ParentUUID, ReceivedUUID) are 'null' if missing/empty.
+% subvol(Ro, Fs, Uuid, ParentUuid, ReceivedUuid, Deleted)
+% Optional fields (ParentUuid, ReceivedUuid) are 'null' if missing/empty.
 :- dynamic subvol/5.
-:- dynamic candidate/1. % candidate(UUID).
 
 % Assert subvolume facts from the JSON dictionary list
 assert_subvols([]).
 assert_subvols([SubvolDict|Rest]) :-
-    get_dict(local_uuid, SubvolDict, UUID), % Mandatory
-    get_dict(fs, SubvolDict, FS), % Mandatory
-    get_dict(parent_uuid, SubvolDict, ParentUUID),
-    get_dict(received_uuid, SubvolDict, ReceivedUUID),
-    get_dict(ro, SubvolDict, RO),
-    assertz(subvol(UUID, FS, ParentUUID, ReceivedUUID, RO)),
+    get_dict(local_uuid, SubvolDict, Uuid), % Mandatory
+    get_dict(fs, SubvolDict, Fs), % Mandatory
+    get_dict(parent_uuid, SubvolDict, ParentUuid),
+    get_dict(received_uuid, SubvolDict, ReceivedUuid),
+    get_dict(ro, SubvolDict, Ro),
+    get_dict(deleted, SubvolDict, Deleted),
+    assertz(subvol(Ro, Fs, Uuid, ParentUuid, ReceivedUuid, Deleted)),
     assert_subvols(Rest).
 
-
-walk(UUID, SourceFS, TargetFS) :-
-    subvol(UUID, _, _, _, _),
-    (
-        % Check if this UUID is a potential candidate itself
-        is_ro_on_fs(UUID, SourceFS),
-        has_ro_descendant_on_fs(UUID, TargetFS),
-        \+ candidate(UUID), % Avoid duplicates
-        assertz(candidate(UUID)) % Found a candidate
-    ;
-        % Otherwise, continue walking up the parent chain
-        (parent_uuid(UUID, Parent), walk(Parent, SourceFS, TargetFS))
-    ).
-walk(_, _, _). % Stop if UUID doesn't exist in subvol facts or has no valid parent
-
-% Check if a subvolume is read-only and on the specified fs
-is_ro_on_fs(UUID, FS) :-
-    subvol(UUID, FS, _, _, true). % Check RO status and FS directly from fact
-
-% Check if a subvolume has any read-only descendant (including itself) on the target fs
-has_ro_descendant_on_fs(UUID, TargetFS) :-
-    is_ro_on_fs(UUID, TargetFS), % Check if the current one matches
-    !. % Found one, cut
-has_ro_descendant_on_fs(UUID, TargetFS) :-
-    % Find children (snapshot or received) by querying subvol facts
-    ( subvol(ChildUUID, _, UUID, _, _) % Child is a snapshot of UUID
-    ; subvol(ChildUUID, _, _, UUID, _) % Child was received from UUID
-    ),
-    has_ro_descendant_on_fs(ChildUUID, TargetFS).
-
 % Main predicate called from command line
-main(Argv) :-
-    % Argv = ['volwalker2.pl', SourceUUID, SourceFS, TargetFS, JsonData]
-    Argv = [_, SourceUUID, SourceFS, TargetFS, JsonData],
-
-    % Parse JSON data
-    atom_json_dict(JsonData, SubvolsDictList, []), % Keep original dict list for now
-
+find_common_parents(SubvolsJson, SourceUuid, SourceFs, TargetFS) :-
+    atom_json_dict(SubvolsJson, SubvolsDictList, []),
     % Clean up previous facts and assert new ones
     retractall(subvol/5),
-    retractall(candidate/1),
-    assert_subvols(SubvolsDictList), % Assert facts from the dict list
+    assert_subvols(SubvolsDictList),
+    findall(_,
+    	(
+    		common_parent(SourceUuid, SourceFs, TargetFS, Uuid),
+    		printf('%s\n', [Uuid])
+		),
+		_).
 
-    % Start the walk from the source UUID
-    walk(SourceUUID, SourceFS, TargetFS),
+common_parent(SourceUuid, SourceFs, TargetFS, Uuid) :-
+	% trivial case, the SourceFs and TargetFS are the same, this Subvol is directly usable as a parent
+	(
+		SourceFs = TargetFS,
+		Uuid = SourceUuid
+	)
+	;
+	(
+		ancestor_chain(SourceUuid, AncestorUuid),
+		ro_chain(AncestorUuid, Uuid),
+		subvol(true, SourceFs, Uuid, _, _, false),
+		ro_chain(Uuid, RemoteUuid),
+		subvol(true, TargetFs, RemoteUuid, _, _, false),
+	).
 
-    % Retrieve candidate UUIDs
-    findall(UUID, candidate(UUID), Candidates),
 
-    % Print candidates (order is not guaranteed, but likely assertion order)
-    print_candidates(Candidates),
-    halt(0). % Exit successfully
+% find the subvol itself + any ancestors
+ancestor_chain(Uuid, Uuid).
 
-main(_) :-
-    write('Usage: swipl volwalker2.pl <SourceUUID> <SourceFS> <TargetFS> ''<JSON_Subvols_Data>''\n'),
-    halt(1). % Exit with error
+ancestor_chain(Uuid, AncestorUuid) :-
+	subvol(_, _, Uuid, ParentUuid, _, _),
+	ancestor_chain(ParentUuid, AncestorUuid).
 
-% Print candidate UUIDs, one per line
-print_candidates([]).
-print_candidates([UUID|Rest]) :- % Now just takes UUID
-    writeln(UUID),
-    print_candidates(Rest).
+ancestor_chain(Uuid, AncestorUuid) :-
+	subvol(_, _, Uuid, _, ReceivedUuid, _),
+	ancestor_chain(ReceivedUuid, AncestorUuid).
 
+% find the subvol itself (if it's ro) + any ancestors or children in a read-only chain
+ro_chain(Uuid, Member) :-
+	(
+			(
+				subvol(true, _, Uuid, _, _, _),
+				Uuid = Member
+			)
+		;
+			(
+				subvol(true, _, Uuid, ParentUuid, _, _),
+				ro_chain(ParentUuid, Member)
+			)
+		;
+			(
+				subvol(true, _, DescendantUuid, Uuid, _, _),
+				ro_chain(DescendantUuid, Member)
+			),
+		;
+			(
+				subvol(true, _, TransferredUuid, _, Uuid, _),
+				ro_chain(TransferredUuid, Member)
+			)
+		;
+			(
+				subvol(true, _, Uuid, _, TransferredUuid, _),
+				ro_chain(TransferredUuid, Member)
+			)
+	).
