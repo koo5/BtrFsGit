@@ -24,8 +24,15 @@ pipx install -e .
 
 
 
-## status
-Undertested, but `commit_and_push_and_checkout`, `remote_commit_and_pull` and other commands work. python-fire (the CLI lib) behaves in unexpected ways sometimes. Data loss could occur ;)
+## key commands
+* transfer_snapshot (push)
+* commit_and_push_and_checkout
+* commit_and_push
+* local_commit
+* update_db
+* prune_local
+* prune_remote
+*
 
 ## why
 I built this because my scenario is not just simple backup, but also transfering subvolumes back and forth between multiple machines, where no one machine is a single source of truth. In other words, a desktop computer and a notebook, and a subvol with a bunch of VM images. And then maybe a bunch of external backup HDDs.

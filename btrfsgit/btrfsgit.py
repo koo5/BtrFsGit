@@ -1078,25 +1078,26 @@ class Bfg:
 	def push(s, SUBVOL, SNAPSHOT, REMOTE_SUBVOL, PARENT=None, CLONESRCS=[]):
 		"""
 		Try to figure out shared parents, if not provided, and send SNAPSHOT to the other side.
+		this function should be replaced by transfer_snapshot, which does not require to know the subvol and remote_subvol
 		"""
-		snapshot_parent_dir = s.calculate_default_snapshot_parent_dir('remote', Path(REMOTE_SUBVOL)).val
-		logbfg.debug(f'mkdir -p {snapshot_parent_dir}')
-		s._remote_cmd(['mkdir', '-p', str(snapshot_parent_dir)])
+		remote_snapshot_parent_dir = s.calculate_default_snapshot_parent_dir('remote', Path(REMOTE_SUBVOL)).val
+		logbfg.debug(f'mkdir -p {remote_snapshot_parent_dir}')
+		s._remote_cmd(['mkdir', '-p', str(remote_snapshot_parent_dir)])
 
 		if PARENT is None:
 			logbfg.debug(f'get_subvol...')
 			my_uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
 			logbfg.debug(f'find_common_parent...')
-			PARENT = s.find_common_parent(SUBVOL, str(snapshot_parent_dir), my_uuid, ('local', 'remote')).val
+			PARENT = s.find_common_parent(SUBVOL, str(remote_snapshot_parent_dir), my_uuid, ('local', 'remote')).val
 			if PARENT is not None:
 				PARENT = PARENT['abspath']
 
-		s.local_send(SNAPSHOT, ' | ' + s._sshstr + ' ' + s._sudo[0] + " btrfs receive " + str(snapshot_parent_dir), PARENT,
+		s.local_send(SNAPSHOT, ' | ' + s._sshstr + ' ' + s._sudo[0] + " btrfs receive " + str(remote_snapshot_parent_dir), PARENT,
 					 CLONESRCS)
 		# Construct the final remote path using the same logic as calculate_default_snapshot_path
 		# (parent dir + '/' + snapshot basename)
 		# The snapshot basename already contains the subvol name and timestamp/tag.
-		remote_snapshot_path = str(Path(snapshot_parent_dir) / Path(SNAPSHOT).name)
+		remote_snapshot_path = str(Path(remote_snapshot_parent_dir) / Path(SNAPSHOT).name)
 		_prerr(f'DONE, \n\tpushed {SNAPSHOT} \n\tinto {remote_snapshot_path}\n.')
 		return Res(remote_snapshot_path)
 
