@@ -110,3 +110,5 @@ site/
 
 testing/
 .aider*
+
+**/.claude/settings.local.json

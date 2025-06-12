@@ -4,13 +4,13 @@
 % Define dynamic predicates to store subvolume info
 % subvol(Ro, Fs, Uuid, ParentUuid, ReceivedUuid, Deleted)
 % Optional fields (ParentUuid, ReceivedUuid) are 'null' if missing/empty.
-:- dynamic subvol/5.
+:- dynamic subvol/6.
 
 % Assert subvolume facts from the JSON dictionary list
 assert_subvols([]).
 assert_subvols([SubvolDict|Rest]) :-
     get_dict(local_uuid, SubvolDict, Uuid), % Mandatory
-    get_dict(fs, SubvolDict, Fs), % Mandatory
+    get_dict(fs_uuid, SubvolDict, Fs), % Mandatory
     get_dict(parent_uuid, SubvolDict, ParentUuid),
     get_dict(received_uuid, SubvolDict, ReceivedUuid),
     get_dict(ro, SubvolDict, Ro),
@@ -19,22 +19,37 @@ assert_subvols([SubvolDict|Rest]) :-
     assert_subvols(Rest).
 
 % Main predicate called from command line
-find_common_parents(SubvolsJson, SourceUuid, SourceFs, TargetFS) :-
+find_common_parents(SubvolsJson, SourceUuid, SourceFs, TargetFs) :-
     atom_json_dict(SubvolsJson, SubvolsDictList, []),
     % Clean up previous facts and assert new ones
-    retractall(subvol/5),
+    retractall(subvol/6),
     assert_subvols(SubvolsDictList),
     findall(_,
     	(
-    		common_parent(SourceUuid, SourceFs, TargetFS, Uuid),
+    		common_parent(SourceUuid, SourceFs, TargetFs, Uuid),
     		printf('%s\n', [Uuid])
 		),
 		_).
 
-common_parent(SourceUuid, SourceFs, TargetFS, Uuid) :-
-	% trivial case, the SourceFs and TargetFS are the same, this Subvol is directly usable as a parent
+% Alternative predicate that reads JSON from file
+find_common_parents_from_file(JsonFile, SourceUuid, SourceFs, TargetFs) :-
+    open(JsonFile, read, Stream),
+    json_read_dict(Stream, SubvolsDictList),
+    close(Stream),
+    % Clean up previous facts and assert new ones
+    retractall(subvol/6),
+    assert_subvols(SubvolsDictList),
+    findall(_,
+    	(
+    		common_parent(SourceUuid, SourceFs, TargetFs, Uuid),
+    		printf('%s\n', [Uuid])
+		),
+		_).
+
+common_parent(SourceUuid, SourceFs, TargetFs, Uuid) :-
+	% trivial case, the SourceFs and TargetFs are the same, this Subvol is directly usable as a parent
 	(
-		SourceFs = TargetFS,
+		SourceFs = TargetFs,
 		Uuid = SourceUuid
 	)
 	;
@@ -43,7 +58,7 @@ common_parent(SourceUuid, SourceFs, TargetFS, Uuid) :-
 		ro_chain(AncestorUuid, Uuid),
 		subvol(true, SourceFs, Uuid, _, _, false),
 		ro_chain(Uuid, RemoteUuid),
-		subvol(true, TargetFs, RemoteUuid, _, _, false),
+		subvol(true, TargetFs, RemoteUuid, _, _, false)
 	).
 
 
@@ -74,7 +89,7 @@ ro_chain(Uuid, Member) :-
 			(
 				subvol(true, _, DescendantUuid, Uuid, _, _),
 				ro_chain(DescendantUuid, Member)
-			),
+			)
 		;
 			(
 				subvol(true, _, TransferredUuid, _, Uuid, _),

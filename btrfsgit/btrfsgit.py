@@ -1255,7 +1255,8 @@ class Bfg:
 
 
 	def _add_abspath(s, subvol_record):
-		if subvol_record['machine'] == 'remote':
+		# Determine if this is a remote subvolume based on host
+		if 'host' in subvol_record and subvol_record['host'] != s.host:
 			s._remote_add_abspath(subvol_record)
 		else:
 			s._local_add_abspath(subvol_record)
@@ -1278,7 +1279,6 @@ class Bfg:
 	def get_local_subvol(s, subvol_path):
 		toplevel_subvol = s.get_subvol(s._local_cmd, subvol_path).val
 		toplevel_subvol['src'] = 'get_subvol'
-		toplevel_subvol['machine'] = 'local'
 		return toplevel_subvol
 
 
@@ -1290,7 +1290,7 @@ class Bfg:
 
 
 
-	def _parent_candidates(s, subvol_path, remote_subvolume, my_uuid, target_fs):
+	def _parent_candidates(s, subvol_path, remote_subvolume, my_uuid, direction):
 
 		all = {}
 		db = s.all_subvols_from_db()
@@ -1300,6 +1300,14 @@ class Bfg:
 
 		logbfg.debug(f'_get_subvolumes local...')
 		local_subvols = s._get_subvolumes(s._local_cmd, subvol_path, 'local')
+
+		# Determine target filesystem UUID based on direction
+		if direction[1] == 'remote':
+			# We're pushing to remote, so target is the remote filesystem
+			target_fs_uuid = s.remote_fs_uuid(remote_subvolume)[0]
+		else:
+			# We're pulling from remote, so target is the local filesystem
+			target_fs_uuid = s.local_fs_uuid(subvol_path)
 
 		for source in [db, local_subvols, remote_subvols]:
 			for x in source:
@@ -1312,7 +1320,7 @@ class Bfg:
 				else:
 					all[x['local_uuid']] = x
 
-		yield from volwalker2.common_parents(all, my_uuid, target_fs)
+		yield from common_parents(all, my_uuid, target_fs_uuid)
 
 
 	def best_shared_parent(s, subvol_path, remote_subvolume, my_uuid, target_fs):
