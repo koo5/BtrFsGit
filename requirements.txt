@@ -8,3 +8,4 @@ termcolor==1.1.0 \
 pathvalidate
 #PyInquirer
 git@https://github.com/thunermay/PyInquirer/tree/master
+psycopg2
