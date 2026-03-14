@@ -1,8 +1,9 @@
 import logging
+from contextlib import contextmanager
 from typing import List
 from typing import Optional
 from sqlalchemy import ForeignKey
-from sqlalchemy import String
+from sqlalchemy import String, text
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import mapped_column
@@ -60,5 +61,23 @@ def get_engine():
 def session():
 	session = Session(get_engine())
 	return session
+
+
+BFG_LOCK_KEY = 1
+
+@contextmanager
+def advisory_lock():
+	"""Acquire a PostgreSQL advisory lock to serialize update_db / prune operations."""
+	log = logging.getLogger('bfg')
+	conn = get_engine().connect()
+	try:
+		log.info("Acquiring advisory lock...")
+		conn.execute(text("SELECT pg_advisory_lock(:key)"), {"key": BFG_LOCK_KEY})
+		log.info("Advisory lock acquired.")
+		yield
+	finally:
+		conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": BFG_LOCK_KEY})
+		log.info("Advisory lock released.")
+		conn.close()
 
 

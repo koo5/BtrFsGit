@@ -401,6 +401,10 @@ class Bfg:
 		"""
 		blast the db with all the subvols we can find on the filesystem.
 		"""
+		with db.advisory_lock():
+			s._update_db(FS)
+
+	def _update_db(s, FS):
 		snapshots = s.get_all_subvols_on_filesystem(FS).val
 		logbfg.debug(f'db.session()...')
 		session = db.session()
@@ -835,6 +839,10 @@ class Bfg:
 		7) For snapshots >= 1 month old, keep one per month.
 		8) Delete everything else.
 		"""
+		with db.advisory_lock():
+			s._prune_local(SUBVOL, DB, DRY_RUN)
+
+	def _prune_local(s, SUBVOL, DB, DRY_RUN):
 
 		logbfg.info(f"Pruning snapshots for {SUBVOL=}")
 		logbfg.debug(f'{DB=} {DRY_RUN=}')
@@ -899,6 +907,10 @@ class Bfg:
 
 
 	def prune_remote(s, LOCAL_SUBVOL, REMOTE_SUBVOL, DRY_RUN=False):
+		with db.advisory_lock():
+			s._prune_remote(LOCAL_SUBVOL, REMOTE_SUBVOL, DRY_RUN)
+
+	def _prune_remote(s, LOCAL_SUBVOL, REMOTE_SUBVOL, DRY_RUN):
 
 		# prepare_prune
 
