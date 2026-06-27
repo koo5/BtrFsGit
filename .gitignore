@@ -109,3 +109,6 @@ ENV/
 site/
 
 testing/
+.dev_intention
+
+.idea/dataSources/

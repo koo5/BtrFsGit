@@ -24,8 +24,7 @@ packages = [
 [tool.poetry.dependencies]
 python = ">=3.8.1,<4.0"
 fire = "0.4.0"
-docutils = "^0.20"
-black  = { version = "20.8b1", optional = true}
+black  = { version = "^24.0", optional = true}
 isort  = { version = "5.6.4", optional = true}
 flake8  = { version = "3.8.4", optional = true}
 pytest  = { version = "6.1.2", optional = true}
@@ -37,9 +36,7 @@ twine  = { version = "^3.3.0", optional = true}
 pre-commit = {version = "^2.12.0", optional = true}
 toml = {version = "^0.10.2", optional = true}
 pathvalidate = "^2.5.0"
-PyInquirer = "^1.0.3"
 sqlalchemy = "^2.0.36"
-psycopg = "^3.2.3"
 psycopg2 = "^2.9.10"
 
 [tool.poetry.extras]

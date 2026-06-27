@@ -91,12 +91,20 @@ see also:
 ## prerequisites
 
 ### install
-This isnt a proper python package yet. Python3.8 is expected. Checkout the repo, do
-```
- virtualenv -p /usr/bin/python3.8 venv
- pip install -r requirements.txt
+Python >=3.8.1 is required. Dependencies are managed with [Poetry](https://python-poetry.org/);
+`pyproject.toml` + `poetry.lock` are the source of truth. Checkout the repo, then either:
 
 ```
+ # recommended: Poetry resolves from the lock file and installs the `bfg` script
+ poetry install
+```
+or, for a plain virtualenv + pip:
+```
+ virtualenv venv && . venv/bin/activate
+ pip install -r requirements.txt
+```
+`requirements.txt` holds the runtime dependencies only and is generated from the lock with
+`poetry export --only main -f requirements.txt -o requirements.txt`; don't edit it by hand.
 ### mount the root
 #### problem
 If you want to work with subvolumes mounted with `subvol=..`: This is how linux distributions set up your system by default. In this case, BFG would not be able to automatically find the filesystem path of a subvolume given its UUID, so, it wouldn't be able to call `btrfs send` with correct `-p` parents.
