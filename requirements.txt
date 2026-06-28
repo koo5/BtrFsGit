@@ -1,5 +1,6 @@
-fire==0.4.0 ; python_full_version >= "3.8.1" and python_version < "4.0" \
-    --hash=sha256:c5e2b8763699d1142393a46d0e3e790c5eb2f0706082df8f647878842c216a62
+fire==0.7.1 ; python_full_version >= "3.8.1" and python_version < "4.0" \
+    --hash=sha256:3b208f05c736de98fb343310d090dcc4d8c78b2a89ea4f32b837c586270a9cbf \
+    --hash=sha256:e43fd8a5033a9001e7e2973bab96070694b9f12f2e0ecf96d4683971b5ab1882
 greenlet==3.1.1 ; python_full_version >= "3.8.1" and python_version < "3.13" and (platform_machine == "aarch64" or platform_machine == "ppc64le" or platform_machine == "x86_64" or platform_machine == "amd64" or platform_machine == "AMD64" or platform_machine == "win32" or platform_machine == "WIN32") \
     --hash=sha256:0153404a4bb921f0ff1abeb5ce8a5131da56b953eda6e14b88dc6bbc04d2049e \
     --hash=sha256:03a088b9de532cbfe2ba2034b2b85e82df37874681e8c470d6fb2f8c04d7e4b7 \
@@ -88,9 +89,6 @@ psycopg2==2.9.10 ; python_full_version >= "3.8.1" and python_version < "4.0" \
     --hash=sha256:91fd603a2155da8d0cfcdbf8ab24a2d54bca72795b90d2a3ed2b6da8d979dee2 \
     --hash=sha256:9d5b3b94b79a844a986d029eee38998232451119ad653aea42bb9220a8c5066b \
     --hash=sha256:c6f7b8561225f9e711a9c47087388a97fdc948211c10a4bccbf0ba68ab7b3b5a
-six==1.17.0 ; python_full_version >= "3.8.1" and python_version < "4.0" \
-    --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \
-    --hash=sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81
 sqlalchemy==2.0.36 ; python_full_version >= "3.8.1" and python_version < "4.0" \
     --hash=sha256:03e08af7a5f9386a43919eda9de33ffda16b44eb11f3b313e6822243770e9763 \
     --hash=sha256:0572f4bd6f94752167adfd7c1bed84f4b240ee6203a95e05d1e208d488d0d436 \
