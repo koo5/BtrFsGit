@@ -56,12 +56,71 @@ import time
 import subprocess
 import fire
 import shlex  # python 3.8 required (for shlex.join)
+import shutil
+import tempfile
+import threading
 from typing import List, Optional
 from .volwalker import *
 from collections import defaultdict
 import re
 from datetime import datetime
 import btrfsgit.db as db
+from rdflib import Literal
+from rdflib.namespace import XSD
+from schnabel import EventLog
+from schnabel.vocab import BFG
+
+
+_PV_AVAILABLE = shutil.which('pv') is not None
+
+
+def _parse_pv_log_line(line, last):
+	"""Parse one line from ``pv -nbf`` stderr (one cumulative byte count per
+	second). Returns the int when it's a new higher value, else None. Pure
+	function so it's unit-testable without subprocess plumbing."""
+	line = line.strip()
+	if not line:
+		return None
+	try:
+		n = int(line)
+	except ValueError:
+		return None
+	if n > last:
+		return n
+	return None
+
+
+def _emit_bytes_progress(invocation, n, kind):
+	"""Two-sink byte-count reporter: writes to the shared ``_prerr`` stream
+	(captured by backup.sh's ``tee``) AND to the active schnabel invocation
+	when one is present. Same source, two materializations — the pyin lesson."""
+	_prerr(f'{kind}: bytes_transferred={n}')
+	if invocation is not None:
+		invocation.emit(BFG.bytesTransferred, Literal(n, datatype=XSD.long))
+
+
+def _tail_pv_log(path, stop, invocation, threshold_bytes=64 * 1024 * 1024):
+	"""Background watcher that tails a ``pv -nbf`` stderr file and emits
+	byte-count progress whenever the value advances by ``threshold_bytes``."""
+	last_reported = 0
+	last_seen = 0
+	try:
+		f = open(path, 'r')
+	except OSError:
+		return
+	with f:
+		while not stop.is_set():
+			line = f.readline()
+			if not line:
+				time.sleep(0.5)
+				continue
+			n = _parse_pv_log_line(line, last_seen)
+			if n is None:
+				continue
+			last_seen = n
+			if n - last_reported >= threshold_bytes:
+				_emit_bytes_progress(invocation, n, 'local_send')
+				last_reported = n
 
 
 def datetime_to_json(o):
@@ -162,6 +221,10 @@ class Bfg:
 		s._local_str = '(here)'
 		s._sudo = ['sudo']
 		s.host = subprocess.check_output(['hostname'], text=True).strip()
+
+		# Structured event log. Null-mode when QUADSTORE env var is unset, so
+		# every emit becomes a fast no-op. See schnabel/docs/design.md.
+		s._log = EventLog()
 
 
 	def _yes(s, msg, dry_run=False):
@@ -401,8 +464,13 @@ class Bfg:
 		"""
 		blast the db with all the subvols we can find on the filesystem.
 		"""
-		with db.advisory_lock():
-			s._update_db(FS)
+		with s._log.invocation(BFG.UpdateDb) as inv:
+			inv.emit(BFG.onHost, Literal(s.host))
+			inv.emit(BFG.fs, Literal(str(FS)))
+			with db.advisory_lock():
+				count = s._update_db(FS)
+			if count is not None:
+				inv.emit(BFG.snapshotsIndexed, Literal(int(count), datatype=XSD.long))
 
 	def _update_db(s, FS):
 		snapshots = s.get_all_subvols_on_filesystem(FS).val
@@ -435,6 +503,7 @@ class Bfg:
 				)
 				session.add(db_snapshot)
 			logbfg.debug(f'commit...')
+			return len(snapshots)
 
 
 	def all_subvols_from_db(s):
@@ -635,8 +704,12 @@ class Bfg:
 		:param REMOTE_SUBVOL: desired filesystem path of your data on the other machine
 		:return: filesystem path of the snapshot created on the other machine
 		"""
-		remote_snapshot_path = s.commit_and_push(SUBVOL, REMOTE_SUBVOL, PARENT=PARENT).val
-		s.checkout_remote(remote_snapshot_path, REMOTE_SUBVOL)
+		with s._log.invocation(BFG.CommitAndPushAndCheckout) as inv:
+			inv.emit(BFG.onHost, Literal(s.host))
+			inv.emit(BFG.subvol, Literal(str(SUBVOL)))
+			inv.emit(BFG.remoteSubvol, Literal(str(REMOTE_SUBVOL)))
+			remote_snapshot_path = s.commit_and_push(SUBVOL, REMOTE_SUBVOL, PARENT=PARENT).val
+			s.checkout_remote(remote_snapshot_path, REMOTE_SUBVOL)
 		return Res(REMOTE_SUBVOL)
 
 
@@ -649,9 +722,13 @@ class Bfg:
 		:param SUBVOL:
 		:return:
 		"""
-		remote_snapshot_path = s.remote_commit(REMOTE_SUBVOL).val
-		local_snapshot_path = s.pull(remote_snapshot_path, SUBVOL).val
-		s.checkout_local(local_snapshot_path, SUBVOL)
+		with s._log.invocation(BFG.RemoteCommitAndPull) as inv:
+			inv.emit(BFG.onHost, Literal(s.host))
+			inv.emit(BFG.remoteSubvol, Literal(str(REMOTE_SUBVOL)))
+			inv.emit(BFG.subvol, Literal(str(SUBVOL)))
+			remote_snapshot_path = s.remote_commit(REMOTE_SUBVOL).val
+			local_snapshot_path = s.pull(remote_snapshot_path, SUBVOL).val
+			s.checkout_local(local_snapshot_path, SUBVOL)
 		_prerr(f'DONE, \n\tpulled {remote_snapshot_path} \n\tinto {SUBVOL}\n.')
 		return Res(SUBVOL)
 
@@ -665,11 +742,14 @@ class Bfg:
 		:param PARENTS:
 		:return:
 		"""
-		snapshot = s.local_commit(SUBVOL).val
-		# print(Path(snapshot).parts[-2:])
-		fn = PATCH_FILE_DIR + '/' + '__'.join(Path(snapshot).parts[-2:])
-		# print(fn)
-		s.local_send(snapshot, ' > ' + fn, PARENT)
+		with s._log.invocation(BFG.CommitAndGeneratePatch) as inv:
+			inv.emit(BFG.onHost, Literal(s.host))
+			inv.emit(BFG.subvol, Literal(str(SUBVOL)))
+			inv.emit(BFG.patchFileDir, Literal(str(PATCH_FILE_DIR)))
+			snapshot = s.local_commit(SUBVOL).val
+			fn = PATCH_FILE_DIR + '/' + '__'.join(Path(snapshot).parts[-2:])
+			s.local_send(snapshot, ' > ' + fn, PARENT, invocation=inv)
+			inv.emit(BFG.patchFile, Literal(fn))
 		_prerr(f'DONE, generated patch \n\tfrom {snapshot} \n\tinto {fn}\n.')
 		return Res(fn)
 
@@ -677,8 +757,13 @@ class Bfg:
 	def commit_and_push(s, SUBVOL, REMOTE_SUBVOL, SNAPSHOT_TAG=None, SNAPSHOT_PATH=None, SNAPSHOT_NAME=None,
 						PARENT=None, CLONESRCS: List[str] = []):
 		"""commit, and transfer the snapshot into .bfg_snapshots on the other machine"""
-		snapshot = s.local_commit(SUBVOL, SNAPSHOT_TAG, SNAPSHOT_PATH, SNAPSHOT_NAME).val
-		return Res(s.push(SUBVOL, snapshot, REMOTE_SUBVOL, PARENT, CLONESRCS).val)
+		with s._log.invocation(BFG.CommitAndPush) as inv:
+			inv.emit(BFG.onHost, Literal(s.host))
+			inv.emit(BFG.subvol, Literal(str(SUBVOL)))
+			inv.emit(BFG.remoteSubvol, Literal(str(REMOTE_SUBVOL)))
+			snapshot = s.local_commit(SUBVOL, SNAPSHOT_TAG, SNAPSHOT_PATH, SNAPSHOT_NAME).val
+			result = s.push(SUBVOL, snapshot, REMOTE_SUBVOL, PARENT, CLONESRCS).val
+		return Res(result)
 
 
 
@@ -752,8 +837,12 @@ class Bfg:
 
 	def checkout_local(s, SNAPSHOT, SUBVOL):
 		"""stash your SUBVOL, and replace it with SNAPSHOT"""
-		s.stash_local(SUBVOL)
-		s._local_cmd(f'btrfs subvolume snapshot {SNAPSHOT} {SUBVOL}')
+		with s._log.invocation(BFG.CheckoutLocal) as inv:
+			inv.emit(BFG.onHost, Literal(s.host))
+			inv.emit(BFG.subvol, Literal(str(SUBVOL)))
+			inv.emit(BFG.snapshotPath, Literal(str(SNAPSHOT)))
+			s.stash_local(SUBVOL)
+			s._local_cmd(f'btrfs subvolume snapshot {SNAPSHOT} {SUBVOL}')
 		_prerr(f'DONE {s._local_str}, \n\tchecked out {SNAPSHOT} \n\tinto {SUBVOL}\n.')
 		return Res(SUBVOL)
 
@@ -762,8 +851,12 @@ class Bfg:
 	def checkout_remote(s, SNAPSHOT, SUBVOL):
 		"""ssh into the other machine,
 		stash your SUBVOL, and replace it with SNAPSHOT"""
-		s.stash_remote(SUBVOL)
-		s._remote_cmd(f'btrfs subvolume snapshot {SNAPSHOT} {SUBVOL}')
+		with s._log.invocation(BFG.CheckoutRemote) as inv:
+			inv.emit(BFG.onHost, Literal(s.host))
+			inv.emit(BFG.subvol, Literal(str(SUBVOL)))
+			inv.emit(BFG.snapshotPath, Literal(str(SNAPSHOT)))
+			s.stash_remote(SUBVOL)
+			s._remote_cmd(f'btrfs subvolume snapshot {SNAPSHOT} {SUBVOL}')
 		_prerr(f'DONE {s._remote_str}, \n\tchecked out {SNAPSHOT} \n\tinto {SUBVOL}\n.')
 		return Res(SUBVOL)
 
@@ -820,7 +913,18 @@ class Bfg:
 		"""
 		SUBVOL = Path(SUBVOL).absolute()
 		SNAPSHOT = s._figure_out_snapshot_name(SUBVOL, TAG, SNAPSHOT, SNAPSHOT_NAME)
-		s._local_make_ro_snapshot(SUBVOL, SNAPSHOT)
+
+		with s._log.invocation(BFG.LocalCommit) as inv:
+			inv.emit(BFG.onHost, Literal(s.host))
+			inv.emit(BFG.subvol, Literal(str(SUBVOL)))
+			inv.emit(BFG.intendedSnapshot, Literal(str(SNAPSHOT)))
+
+			s._local_make_ro_snapshot(SUBVOL, SNAPSHOT)
+
+			snap = inv.bn('snapshot')
+			inv.emit(BFG.snapshot, snap)
+			inv.emit_about(snap, BFG.abspath, Literal(str(SNAPSHOT)))
+
 		return Res(SNAPSHOT)
 
 
@@ -838,10 +942,14 @@ class Bfg:
 		7) For snapshots >= 1 month old, keep one per month.
 		8) Delete everything else.
 		"""
-		with db.advisory_lock():
-			s._prune_local(SUBVOL, DB, DRY_RUN)
+		with s._log.invocation(BFG.PruneLocal) as inv:
+			inv.emit(BFG.onHost, Literal(s.host))
+			inv.emit(BFG.subvol, Literal(str(SUBVOL)))
+			inv.emit(BFG.dryRun, Literal(bool(DRY_RUN)))
+			with db.advisory_lock():
+				s._prune_local(SUBVOL, DB, DRY_RUN, invocation=inv)
 
-	def _prune_local(s, SUBVOL, DB, DRY_RUN):
+	def _prune_local(s, SUBVOL, DB, DRY_RUN, invocation=None):
 
 		logbfg.info(f"Pruning snapshots for {SUBVOL=}")
 		logbfg.debug(f'{DB=} {DRY_RUN=}')
@@ -900,16 +1008,23 @@ class Bfg:
 					if not s._yes(shlex.join(cmd)):
 						continue
 					s._local_cmd(cmd)
+					if invocation is not None:
+						invocation.emit(BFG.prunedSnapshot, Literal(str(path)))
 					_prerr(f"Deleted snapshot: {path}")
 
 		_prerr("Done pruning.")
 
 
 	def prune_remote(s, LOCAL_SUBVOL, REMOTE_SUBVOL, DRY_RUN=False):
-		with db.advisory_lock():
-			s._prune_remote(LOCAL_SUBVOL, REMOTE_SUBVOL, DRY_RUN)
+		with s._log.invocation(BFG.PruneRemote) as inv:
+			inv.emit(BFG.onHost, Literal(s.host))
+			inv.emit(BFG.subvol, Literal(str(LOCAL_SUBVOL)))
+			inv.emit(BFG.remoteSubvol, Literal(str(REMOTE_SUBVOL)))
+			inv.emit(BFG.dryRun, Literal(bool(DRY_RUN)))
+			with db.advisory_lock():
+				s._prune_remote(LOCAL_SUBVOL, REMOTE_SUBVOL, DRY_RUN, invocation=inv)
 
-	def _prune_remote(s, LOCAL_SUBVOL, REMOTE_SUBVOL, DRY_RUN):
+	def _prune_remote(s, LOCAL_SUBVOL, REMOTE_SUBVOL, DRY_RUN, invocation=None):
 
 		# prepare_prune
 
@@ -978,6 +1093,8 @@ class Bfg:
 					if not s._yes(shlex.join(cmd)):
 						continue
 					s._remote_cmd(cmd)
+					if invocation is not None:
+						invocation.emit(BFG.prunedSnapshot, Literal(str(path)))
 					_prerr(f"Deleted snapshot: {path}")
 
 		_prerr("No more buckets.")
@@ -1071,7 +1188,16 @@ class Bfg:
 		else:
 			SNAPSHOT = s.calculate_default_snapshot_path('remote', Path(REMOTE_SUBVOL), 'remote_commit',
 														 SNAPSHOT_NAME).val
-		s._remote_make_ro_snapshot(REMOTE_SUBVOL, SNAPSHOT)
+
+		with s._log.invocation(BFG.RemoteCommit) as inv:
+			inv.emit(BFG.onHost, Literal(s.host))
+			inv.emit(BFG.subvol, Literal(str(REMOTE_SUBVOL)))
+			inv.emit(BFG.intendedSnapshot, Literal(str(SNAPSHOT)))
+			s._remote_make_ro_snapshot(REMOTE_SUBVOL, SNAPSHOT)
+			snap = inv.bn('snapshot')
+			inv.emit(BFG.snapshot, snap)
+			inv.emit_about(snap, BFG.abspath, Literal(str(SNAPSHOT)))
+
 		_prerr(f'DONE {s._remote_str},\n\tsnapshotted {REMOTE_SUBVOL} \n\tinto {SNAPSHOT}\n.')
 		return Res(SNAPSHOT)
 
@@ -1082,37 +1208,79 @@ class Bfg:
 		Try to figure out shared parents, if not provided, and send SNAPSHOT to the other side.
 		"""
 		snapshot_parent_dir = s.calculate_default_snapshot_parent_dir('remote', Path(REMOTE_SUBVOL)).val
-		logbfg.debug(f'mkdir -p {snapshot_parent_dir}')
-		s._remote_cmd(['mkdir', '-p', str(snapshot_parent_dir)])
 
-		if PARENT is None:
-			logbfg.debug(f'get_subvol...')
-			my_uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
-			logbfg.debug(f'find_common_parent...')
-			PARENT = s.find_common_parent(SUBVOL, str(snapshot_parent_dir), my_uuid, ('local', 'remote')).val
-			if PARENT is not None:
-				PARENT = PARENT['abspath']
+		with s._log.invocation(BFG.Push) as inv:
+			inv.emit(BFG.onHost, Literal(s.host))
+			inv.emit(BFG.subvol, Literal(str(SUBVOL)))
+			inv.emit(BFG.snapshotPath, Literal(str(SNAPSHOT)))
+			inv.emit(BFG.remoteSubvol, Literal(str(REMOTE_SUBVOL)))
 
-		s.local_send(SNAPSHOT, ' | ' + s._sshstr + ' ' + s._sudo[0] + " btrfs receive " + str(snapshot_parent_dir), PARENT,
-					 CLONESRCS)
+			logbfg.debug(f'mkdir -p {snapshot_parent_dir}')
+			s._remote_cmd(['mkdir', '-p', str(snapshot_parent_dir)])
+
+			parent_record = None
+			if PARENT is None:
+				logbfg.debug(f'get_subvol...')
+				my_uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
+				logbfg.debug(f'find_common_parent...')
+				parent_record = s.find_common_parent(SUBVOL, str(snapshot_parent_dir), my_uuid, ('local', 'remote')).val
+				if parent_record is not None:
+					PARENT = parent_record['abspath']
+			else:
+				parent_record = {'abspath': str(PARENT)}
+
+			if parent_record is not None:
+				pi = inv.bn('parent_snapshot')
+				inv.emit(BFG.parentSnapshot, pi)
+				inv.emit_about(pi, BFG.abspath, Literal(parent_record['abspath']))
+				if parent_record.get('local_uuid'):
+					inv.emit_about(pi, BFG.localUuid, Literal(parent_record['local_uuid']))
+				if parent_record.get('received_uuid'):
+					inv.emit_about(pi, BFG.receivedUuid, Literal(parent_record['received_uuid']))
+
+			s.local_send(SNAPSHOT, ' | ' + s._sshstr + ' ' + s._sudo[0] + " btrfs receive " + str(snapshot_parent_dir), PARENT,
+						 CLONESRCS, invocation=inv)
+
+			result_path = str(snapshot_parent_dir) + '/' + Path(SNAPSHOT).parts[-1]
+			inv.emit(BFG.pushedTo, Literal(result_path))
+
 		_prerr(f'DONE, \n\tpushed {SNAPSHOT} \n\tinto {snapshot_parent_dir}\n.')
-		return Res(str(snapshot_parent_dir) + '/' + Path(SNAPSHOT).parts[-1])
+		return Res(result_path)
 
 
 
 	def pull(s, REMOTE_SNAPSHOT, LOCAL_SUBVOL, PARENT=None, CLONESRCS=[]):
 		local_snapshot_parent_dir = s.calculate_default_snapshot_parent_dir('local', Path(LOCAL_SUBVOL)).val
-		s._local_cmd(['mkdir', '-p', str(local_snapshot_parent_dir)])
 
-		if PARENT is None:
-			my_uuid = s.get_subvol(s._remote_cmd, REMOTE_SNAPSHOT).val['local_uuid']
-			PARENT = s.find_common_parent(local_snapshot_parent_dir, REMOTE_SNAPSHOT, my_uuid, ('remote', 'local')).val
-			if PARENT is not None:
-				PARENT = PARENT['abspath']
+		with s._log.invocation(BFG.Pull) as inv:
+			inv.emit(BFG.onHost, Literal(s.host))
+			inv.emit(BFG.remoteSnapshot, Literal(str(REMOTE_SNAPSHOT)))
+			inv.emit(BFG.subvol, Literal(str(LOCAL_SUBVOL)))
 
-		s.remote_send(REMOTE_SNAPSHOT, local_snapshot_parent_dir, PARENT, CLONESRCS)
+			s._local_cmd(['mkdir', '-p', str(local_snapshot_parent_dir)])
 
-		local_snapshot = str(local_snapshot_parent_dir) + '/' + Path(REMOTE_SNAPSHOT).parts[-1]
+			parent_record = None
+			if PARENT is None:
+				my_uuid = s.get_subvol(s._remote_cmd, REMOTE_SNAPSHOT).val['local_uuid']
+				parent_record = s.find_common_parent(local_snapshot_parent_dir, REMOTE_SNAPSHOT, my_uuid, ('remote', 'local')).val
+				if parent_record is not None:
+					PARENT = parent_record['abspath']
+			else:
+				parent_record = {'abspath': str(PARENT)}
+
+			if parent_record is not None:
+				pi = inv.bn('parent_snapshot')
+				inv.emit(BFG.parentSnapshot, pi)
+				inv.emit_about(pi, BFG.abspath, Literal(parent_record['abspath']))
+				if parent_record.get('local_uuid'):
+					inv.emit_about(pi, BFG.localUuid, Literal(parent_record['local_uuid']))
+				if parent_record.get('received_uuid'):
+					inv.emit_about(pi, BFG.receivedUuid, Literal(parent_record['received_uuid']))
+
+			s.remote_send(REMOTE_SNAPSHOT, local_snapshot_parent_dir, PARENT, CLONESRCS, invocation=inv)
+
+			local_snapshot = str(local_snapshot_parent_dir) + '/' + Path(REMOTE_SNAPSHOT).parts[-1]
+			inv.emit(BFG.pulledTo, Literal(local_snapshot))
 
 		_prerr(f'DONE, \n\tpulled {REMOTE_SNAPSHOT} \n\tinto {local_snapshot}\n.')
 		return Res(local_snapshot)
@@ -1158,32 +1326,110 @@ class Bfg:
 
 
 
-	def local_send(s, SNAPSHOT, target, PARENT, CLONESRCS=[]):
+	def local_send(s, SNAPSHOT, target, PARENT, CLONESRCS=[], invocation=None):
 		parents_args = s._parent_args(PARENT, CLONESRCS)
 
-		# _prerr((str(parents_args)) + ' #...')
-		cmd = shlex.join(s._sudo + ['btrfs', 'send'] + parents_args + [SNAPSHOT]) + target
+		pv_log_path = None
+		if _PV_AVAILABLE:
+			# Tee through ``pv -nbf`` (cumulative bytes per second written to
+			# stderr) → redirected to a tmpfile a background watcher reads.
+			# Sink-parity with the in-process counter used by remote_send.
+			with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.pv',
+											  prefix='bfg-bytes-') as tf:
+				pv_log_path = tf.name
+			cmd = (
+				shlex.join(s._sudo + ['btrfs', 'send'] + parents_args + [SNAPSHOT])
+				+ ' | pv -nbf 2>' + shlex.quote(pv_log_path)
+				+ target
+			)
+		else:
+			if invocation is not None:
+				_prerr('local_send: pv not installed — byte-count reporting disabled '
+					'(install `pv` for richer progress)')
+			cmd = shlex.join(s._sudo + ['btrfs', 'send'] + parents_args + [SNAPSHOT]) + target
+
 		logbtrfs.info(f'local_send: {cmd=} #...')
-		subprocess.check_call(cmd, shell=True)
+
+		stop = threading.Event()
+		watcher = None
+		if pv_log_path is not None:
+			watcher = threading.Thread(
+				target=_tail_pv_log,
+				args=(pv_log_path, stop, invocation),
+				daemon=True,
+			)
+			watcher.start()
+
+		try:
+			subprocess.check_call(cmd, shell=True)
+		finally:
+			if watcher is not None:
+				stop.set()
+				watcher.join(timeout=2)
+			if pv_log_path is not None:
+				# Final emit: read the last byte count from pv's log so we
+				# never drop the total even if the watcher missed the tail.
+				try:
+					with open(pv_log_path, 'r') as f:
+						contents = f.read()
+					for line in reversed(contents.strip().splitlines()):
+						parsed = _parse_pv_log_line(line, -1)
+						if parsed is not None:
+							_emit_bytes_progress(invocation, parsed, 'local_send (final)')
+							break
+				except OSError:
+					pass
+				try:
+					os.unlink(pv_log_path)
+				except OSError:
+					pass
 
 
 
-	def remote_send(s, REMOTE_SNAPSHOT, LOCAL_DIR, PARENT, CLONESRCS):
+	def remote_send(s, REMOTE_SNAPSHOT, LOCAL_DIR, PARENT, CLONESRCS, invocation=None):
 		parents_args = s._parent_args(PARENT, CLONESRCS)
 
 		cmd1 = shlex.split(s._sshstr) + s._sudo + ['btrfs', 'send'] + parents_args + [REMOTE_SNAPSHOT]
 		cmd2 = s._sudo + ['btrfs', 'receive', LOCAL_DIR]
 		logbtrfs.info(shlex.join(cmd1) + ' >>|>> ' + shlex.join(cmd2))
-		p1 = subprocess.Popen(
-			cmd1,
-			stdout=subprocess.PIPE)
-		p2 = subprocess.Popen(
-			cmd2,
-			stdin=p1.stdout)
-		p1.stdout.close()  # https://www.titanwolf.org/Network/q/91c3c5dd-aa49-4bf4-911d-1bfe5ac304da/y
-		p2.communicate()
+
+		p1 = subprocess.Popen(cmd1, stdout=subprocess.PIPE)
+		p2 = subprocess.Popen(cmd2, stdin=subprocess.PIPE)
+
+		total = 0
+		last_reported = 0
+		chunk_size = 4 * 1024 * 1024  # 4 MiB
+		threshold_bytes = 64 * 1024 * 1024  # report every 64 MiB
+
+		try:
+			while True:
+				chunk = p1.stdout.read(chunk_size)
+				if not chunk:
+					break
+				p2.stdin.write(chunk)
+				total += len(chunk)
+				if total - last_reported >= threshold_bytes:
+					_emit_bytes_progress(invocation, total, 'remote_send')
+					last_reported = total
+		finally:
+			# Close the read end of p1's pipe (mirrors the original
+			# https://www.titanwolf.org/Network/q/91c3c5dd-aa49-4bf4-911d-1bfe5ac304da/y
+			# workaround) and signal EOF to btrfs receive.
+			try:
+				p1.stdout.close()
+			except OSError:
+				pass
+			try:
+				p2.stdin.close()
+			except OSError:
+				pass
+
+		_emit_bytes_progress(invocation, total, 'remote_send (final)')
+
+		p1.wait()
+		p2.wait()
 		if p2.returncode != 0:
-			loggfg.error('exit code ' + str(p2.returncode))
+			logbfg.error('btrfs receive exit code ' + str(p2.returncode))
 			exit(1)
 
 

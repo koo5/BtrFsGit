@@ -41,6 +41,7 @@ PyInquirer = "^1.0.3"
 sqlalchemy = "^2.0.36"
 psycopg = "^3.2.3"
 psycopg2 = "^2.9.10"
+schnabel = {path = "../../../hackery2/dev/hackery2/src/schnabel", develop = true}
 
 [tool.poetry.extras]
 test = [
