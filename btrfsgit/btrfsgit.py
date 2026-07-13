@@ -53,11 +53,13 @@ from pathlib import Path
 from pathvalidate import sanitize_filename
 import sys, os
 import time
+import shutil
 import subprocess
 import fire
 import shlex  # python 3.8 required (for shlex.join)
 from typing import List, Optional
 from .volwalker import *
+from . import volwalker2
 from collections import defaultdict
 import re
 from datetime import datetime
@@ -865,44 +867,294 @@ class Bfg:
 
 		newest = local_snapshots[-1]['path']
 
-		buckets = s.put_snapshots_into_buckets(local_snapshots)
+		for d in s._prune_decisions(local_snapshots, mrcs, newest):
+			path = d['snap']['path']
+			logbfg.info(f"  {path} - {d['reason']}")
+
+			if d['prunable'] and not DRY_RUN:
+				cmd = ['btrfs', 'subvolume', 'delete', str(path)]
+				if not s._yes(shlex.join(cmd)):
+					continue
+				s._local_cmd(cmd)
+				_prerr(f"Deleted snapshot: {path}")
+
+		_prerr("Done pruning.")
+
+
+	def _prune_decisions(s, local_snapshots_sorted, mrcs, newest):
+		"""
+		Decide, per snapshot, whether prune_local's time-based retention policy would delete it,
+		and why. This is the single source of truth shared by _prune_local (which acts on it) and
+		report_local (which only displays it).
+
+		Policy: bucket snapshots by age, keep the newest snapshot in each bucket, keep the overall
+		newest, and keep every most recent common snapshot (shared parent). Everything else is
+		prunable - including snapshots newer than a shared parent, which get thinned by the bucket
+		policy just like the rest. That is safe: a snapshot newer than a remote's shared parent is
+		by definition not on that remote, so it can never be that remote's `btrfs send -p` parent;
+		the shared parent itself is kept (it is in mrcs) and remains available for incrementals.
+
+		Returns a list of {'snap', 'prunable', 'reason'} in processing order (oldest first).
+		"""
+		decisions = []
+		buckets = s.put_snapshots_into_buckets(local_snapshots_sorted)
 
 		for bucket, snaplist in buckets.items():
-			logbfg.info(f"Bucket: {bucket}")
-
-			for i,snap in enumerate(snaplist):
+			for i, snap in enumerate(snaplist):
 				path = snap['path']
 
 				is_newest = path == newest
 				is_mrc = path in mrcs
 				is_last = i == len(snaplist) - 1
-				is_prunable = not is_newest and not is_mrc and not is_last
 
-				flags = ''
 				if is_mrc:
-					flags += ' (mrc)'
-				if is_newest:
-					flags += ' (newest)'
-				if is_last:
-					flags += ' (last)'
-				if is_prunable:
-					flags += ' (prunable)'
+					decisions.append({'snap': snap, 'prunable': False, 'reason': 'keep (shared parent)'})
+				elif is_newest:
+					decisions.append({'snap': snap, 'prunable': False, 'reason': 'keep (newest)'})
+				elif is_last:
+					decisions.append({'snap': snap, 'prunable': False, 'reason': f'keep (newest in {bucket})'})
 				else:
-					flags += ' - keep'
-				logbfg.info(f"  {path}{flags}")
+					decisions.append({'snap': snap, 'prunable': True, 'reason': f'prune (extra in {bucket})'})
 
-				if is_mrc:
-					logbfg.debug(f"this is the most recent common snapshot as calculated from db, stopping here.")
-					return
+		return decisions
 
-				if is_prunable and not DRY_RUN:
-					cmd = ['btrfs', 'subvolume', 'delete', str(path)]
-					if not s._yes(shlex.join(cmd)):
-						continue
-					s._local_cmd(cmd)
-					_prerr(f"Deleted snapshot: {path}")
 
-		_prerr("Done pruning.")
+	def clean_local(s, SUBVOL, PERCENT=30, DB=True, DRY_RUN=False):
+		"""
+		Aggressively clean old snapshots under SUBVOL.
+
+		Unlike prune_local, which keeps a time-bucketed spread of snapshots according to a
+		retention policy, clean_local simply deletes the oldest PERCENT% of snapshots. It
+		refuses to delete only the snapshots that are critical for future incremental sends:
+
+		1) the most recent common snapshot (MRCS) shared with each remote filesystem - these
+		   are needed as a `btrfs send -p` parent so the next backup doesn't have to resend
+		   everything (this is the "shared parent" that a future shared-parent search relies on),
+		2) the single newest local snapshot - the latest restore point and the likely basis for
+		   the next commit.
+
+		Everything else within the oldest PERCENT% is fair game.
+
+		:param SUBVOL: the subvolume whose snapshots to clean
+		:param PERCENT: how many of the oldest snapshots to consider for cleaning, as a
+			percentage of the total number of snapshots (default 30)
+		:param DB: use the shared database to figure out which snapshots are shared with remotes.
+			Without it (DB=False) no snapshot can be recognised as a shared parent, so only the
+			newest is protected - dangerous, as it may delete a snapshot still needed as a parent.
+		:param DRY_RUN: only report what would be deleted, delete nothing
+		"""
+		with db.advisory_lock():
+			s._clean_local(SUBVOL, PERCENT, DB, DRY_RUN)
+
+	def _clean_local(s, SUBVOL, PERCENT, DB, DRY_RUN):
+
+		PERCENT = float(PERCENT)
+		if PERCENT < 0 or PERCENT > 100:
+			_prerr(f'PERCENT must be between 0 and 100, got {PERCENT}')
+			sys.exit(1)
+
+		logbfg.info(f"Cleaning snapshots for {SUBVOL=} (oldest {PERCENT}%)")
+		logbfg.debug(f'{DB=} {DRY_RUN=}')
+
+		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
+
+		# the snapshots we must never delete: the most recent snapshot shared with each remote
+		# filesystem, i.e. the ones a future shared-parent search would pick. protected maps
+		# snapshot path -> list of "host:fs" labels it is a shared parent for.
+		protected = s._shared_parents(SUBVOL) if DB else {}
+		if not DB:
+			logbfg.warning("clean_local with DB=False: cannot identify shared parents; "
+						   "nothing will be protected except the newest snapshot!")
+		logbfg.info(f"protecting {len(protected)} shared parent snapshot(s):")
+		for p, labels in protected.items():
+			logbfg.info(f"  keep (shared parent -> {'; '.join(labels)}): {p}")
+
+		# use the live list of snapshots (not the db) so we only ever try to delete snapshots
+		# that actually still exist - e.g. after a prune has just run in the same pipeline.
+		local_snapshots = s.get_local_bfg_snapshots(SUBVOL).val
+		local_snapshots = sorted(local_snapshots, key=lambda x: x['dt'])
+
+		n = len(local_snapshots)
+		if n == 0:
+			logbfg.info(f"No snapshots to clean for {SUBVOL}")
+			return
+
+		# always keep the newest snapshot
+		newest = local_snapshots[-1]['path']
+
+		count_to_clean = int(n * PERCENT / 100.0)
+		logbfg.info(f"{n} snapshot(s) total, considering the oldest {count_to_clean} for cleaning")
+
+		deleted = 0
+		for i, snap in enumerate(local_snapshots):
+			if i >= count_to_clean:
+				break
+			path = snap['path']
+
+			is_newest = path == newest
+			is_protected = path in protected
+			is_cleanable = not is_newest and not is_protected
+
+			flags = ''
+			if is_protected:
+				flags += f" (shared parent -> {'; '.join(protected[path])} - keep)"
+			if is_newest:
+				flags += ' (newest - keep)'
+			if is_cleanable:
+				flags += ' (cleanable)'
+			logbfg.info(f"  {path}{flags}")
+
+			if is_cleanable and not DRY_RUN:
+				cmd = ['btrfs', 'subvolume', 'delete', str(path)]
+				if not s._yes(shlex.join(cmd)):
+					continue
+				s._local_cmd(cmd)
+				deleted += 1
+				_prerr(f"Deleted snapshot: {path}")
+
+		_prerr(f"Done cleaning. Deleted {deleted} snapshot(s).")
+
+
+	def _shared_parents(s, SUBVOL):
+		"""
+		Map snapshot path -> list of "host:fs" labels for which that snapshot is the most recent
+		common snapshot (shared parent). These are the snapshots that must be kept so that future
+		backups to those remotes can still find a common parent for an incremental `btrfs send -p`.
+		"""
+		all = s.all_subvols_from_db()
+		result = {}
+		for entry in s.most_recent_common_snapshots_by_fs(all, SUBVOL):
+			label = s._remote_fs_label(all, entry['fs_uuid'], entry['hosts'])
+			result.setdefault(entry['snapshot']['path'], []).append(label)
+		return result
+
+
+	def _human_age(s, seconds):
+		"""compact human-readable age, e.g. 45s, 12m, 3h, 6d, 8mo, 2y"""
+		seconds = int(seconds)
+		if seconds < 60:
+			return f'{seconds}s'
+		minutes = seconds // 60
+		if minutes < 60:
+			return f'{minutes}m'
+		hours = minutes // 60
+		if hours < 24:
+			return f'{hours}h'
+		days = hours // 24
+		if days < 30:
+			return f'{days}d'
+		if days < 365:
+			return f'{days // 30}mo'
+		return f'{days // 365}y'
+
+
+	def report_local(s, SUBVOL, PERCENT=30, DB=True, ALL=False):
+		"""
+		Read-only: print a table of the local snapshots of SUBVOL, the action prune+clean would
+		take on each, and the reason. Nothing is deleted. Assumes the db is reasonably current
+		(run update_db first, or use `backup report`, for accurate shared-parent detection).
+
+		By default only the interesting rows are shown - snapshots that would be removed, the
+		shared parents that are held back, and the newest one. Long runs of snapshots that are
+		simply kept because they're recent are collapsed into a single "... N kept ..." line.
+		Pass ALL=true to list every snapshot.
+
+		:param SUBVOL: the subvolume whose snapshots to report on
+		:param PERCENT: the clean percentage to simulate (default 30), so the report matches what
+			`clean_local --PERCENT=...` would do
+		:param DB: use the db to detect shared parents (as clean/prune do)
+		:param ALL: list every snapshot instead of collapsing the uninteresting kept ones
+		"""
+		PERCENT = float(PERCENT)
+		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
+
+		shared = s._shared_parents(SUBVOL) if DB else {}
+
+		snapshots = sorted(s.get_local_bfg_snapshots(SUBVOL).val, key=lambda x: x['dt'])
+		n = len(snapshots)
+
+		print(f'subvol: {SUBVOL}   ({n} snapshot(s)' + ('' if DB else ', DB disabled - shared parents unknown') + ')')
+		if n == 0:
+			return
+
+		mrcs = set(shared.keys())
+		newest = snapshots[-1]['path']
+
+		# simulate prune, then simulate clean on whatever prune would leave behind - this mirrors
+		# the prune-then-clean pipeline in backup.py.
+		prune_reason = {}
+		prune_drop = set()
+		for d in s._prune_decisions(snapshots, mrcs, newest):
+			path = d['snap']['path']
+			prune_reason[path] = d['reason']
+			if d['prunable']:
+				prune_drop.add(path)
+
+		survivors = [snap for snap in snapshots if snap['path'] not in prune_drop]
+		count_to_clean = int(len(survivors) * PERCENT / 100.0)
+		clean_drop = set()
+		for i, snap in enumerate(survivors):
+			if i >= count_to_clean:
+				break
+			path = snap['path']
+			if path not in mrcs and path != newest:
+				clean_drop.add(path)
+
+		now = datetime.now()
+		rows = []
+		for snap in snapshots:
+			path = snap['path']
+			age = s._human_age((now - snap['dt']).total_seconds())
+			if path in shared:
+				action, reason, interesting = 'KEEP', 'shared parent -> ' + '; '.join(shared[path]), True
+			elif path == newest:
+				action, reason, interesting = 'KEEP', 'newest', True
+			elif path in prune_drop:
+				action, reason, interesting = 'prune', prune_reason[path], True
+			elif path in clean_drop:
+				action, reason, interesting = 'clean', f'oldest {PERCENT:g}%', True
+			else:
+				# just kept because it's recent / a bucket survivor - noise, collapse by default
+				action, reason, interesting = 'keep', prune_reason.get(path, 'keep'), False
+			rows.append({
+				'date': snap['dt'].strftime('%Y-%m-%d %H:%M'),
+				'age': age,
+				'action': action,
+				'reason': reason,
+				'interesting': interesting or ALL,
+			})
+
+		shown = [r for r in rows if r['interesting']]
+		header = ('DATE', 'AGE', 'ACTION', 'REASON')
+		date_w = max([len(header[0])] + [len(r['date']) for r in shown])
+		age_w = max([len(header[1])] + [len(r['age']) for r in shown])
+		action_w = max([len(header[2])] + [len(r['action']) for r in shown])
+		print(f'{header[0]:<{date_w}}  {header[1]:<{age_w}}  {header[2]:<{action_w}}  {header[3]}')
+
+		# print interesting rows, collapsing contiguous runs of hidden (uninteresting) keeps
+		run = []
+		def flush_run():
+			if not run:
+				return
+			if len(run) == 1:
+				r = run[0]
+				print(f"{r['date']:<{date_w}}  {r['age']:<{age_w}}  {r['action']:<{action_w}}  {r['reason']}")
+			else:
+				print(f"   ... {len(run)} more kept ({run[0]['date']} -> {run[-1]['date']}) ...")
+			run.clear()
+
+		for r in rows:
+			if r['interesting']:
+				flush_run()
+				print(f"{r['date']:<{date_w}}  {r['age']:<{age_w}}  {r['action']:<{action_w}}  {r['reason']}")
+			else:
+				run.append(r)
+		flush_run()
+
+		n_shared = sum(1 for r in rows if r['reason'].startswith('shared parent'))
+		n_keep = n - len(prune_drop) - len(clean_drop)
+		print(f'summary: {n} snapshots: {len(prune_drop)} prune, {len(clean_drop)} clean, '
+			  f'{n_shared} shared-parent kept, {n_keep} kept total')
 
 
 	def prune_remote(s, LOCAL_SUBVOL, REMOTE_SUBVOL, DRY_RUN=False):
@@ -944,43 +1196,21 @@ class Bfg:
 			return
 
 		newest = remote_snapshots[-1]['path']
-		buckets = s.put_snapshots_into_buckets(remote_snapshots)
 
+		# same retention decisions as prune_local (keep shared parents + newest + one per bucket,
+		# thin the rest, no freeze past the shared parent), but delete on the remote side.
+		for d in s._prune_decisions(remote_snapshots, mrcs, newest):
+			path = d['snap']['path']
+			logbfg.info(f"  {path} - {d['reason']}")
 
-		for bucket, snaplist in buckets.items():
-			logbfg.info(f"Bucket: {bucket}")
+			if d['prunable'] and not DRY_RUN:
+				cmd = ['btrfs', 'subvolume', 'delete', str(path)]
+				if not s._yes(shlex.join(cmd)):
+					continue
+				s._remote_cmd(cmd)
+				_prerr(f"Deleted snapshot: {path}")
 
-			for i,snap in enumerate(snaplist):
-				path = snap['path']
-
-				is_newest = path == newest
-				is_mrc = path in mrcs
-				is_last = i == len(snaplist) - 1
-				is_prunable = not is_newest and not is_mrc and not is_last
-
-				flags = ''
-				if is_mrc:
-					flags += ' (mrc)'
-				if is_newest:
-					flags += ' (newest)'
-				if is_last:
-					flags += ' (last)'
-				if is_prunable:
-					flags += ' (prunable)'
-				logbfg.info(f"  {path}{flags}")
-
-				if is_mrc:
-					logbfg.info(f"this is the most recent common snapshot as calculated from db, stopping here.")
-					return
-
-				if is_prunable and not DRY_RUN:
-					cmd = ['btrfs', 'subvolume', 'delete', str(path)]
-					if not s._yes(shlex.join(cmd)):
-						continue
-					s._remote_cmd(cmd)
-					_prerr(f"Deleted snapshot: {path}")
-
-		_prerr("No more buckets.")
+		_prerr("Done pruning.")
 
 
 
@@ -1017,6 +1247,15 @@ class Bfg:
 		"""
 		Find the most recent common snapshots between the local and each remote filesystem.
 		"""
+		return [x['snapshot'] for x in s.most_recent_common_snapshots_by_fs(all, SUBVOL)]
+
+
+	def most_recent_common_snapshots_by_fs(s, all, SUBVOL):
+		"""
+		Like most_recent_common_snapshots, but keep the association between each most recent
+		common snapshot and the remote filesystem it is shared with. Returns a list of dicts:
+		{'fs_uuid': <remote fs uuid>, 'hosts': <set of hostnames>, 'snapshot': <local snapshot record>}.
+		"""
 		result = []
 
 		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
@@ -1050,9 +1289,17 @@ class Bfg:
 				logbfg.debug(f"  {candidate['local_uuid']}")
 
 			if len(candidates) > 0:
-				result.append(candidates[0])
+				result.append({'fs_uuid': fs_uuid, 'hosts': hosts, 'snapshot': candidates[0]})
 
 		return result
+
+
+	def _remote_fs_label(s, all, fs_uuid, hosts):
+		"""human-readable "host:fs" label for a remote filesystem, derived from the db records"""
+		fs_paths = sorted(set(str(snap['fs']) for snap in all if snap['fs_uuid'] == fs_uuid))
+		host_str = ','.join(sorted(hosts)) if hosts else '?'
+		fs_str = ','.join(fs_paths) if fs_paths else fs_uuid
+		return f'{host_str}:{fs_str}'
 
 
 
@@ -1263,6 +1510,12 @@ class Bfg:
 		"""
 		my uuid is the local_uuid of the local rw subvolume that we're trying to transfer to the remote machine.
 		direction is either ('local', 'remote') or ('remote', 'local')
+
+		The walk is done by volwalker (v1) and/or volwalker2 (Prolog), controlled by the
+		BFG_VOLWALKER env var: 'v1', 'v2', or 'shadow' (the default: run both, use v1's
+		answer, and log disagreements - volwalker2 finding extra candidates is its
+		expected improvement, volwalker2 missing a v1 candidate is a red flag and the
+		input is dumped for analysis).
 		"""
 
 		all_subvols2 = {}
@@ -1288,7 +1541,71 @@ class Bfg:
 			logging.debug('_parent_candidates2:' + json.dumps(i, indent=2, default=datetime_to_json, sort_keys=True))
 
 		logging.debug(f'_parent_candidates2 all_subvols: {len(all_subvols)}')
-		yield from VolWalker(all_subvols2, direction).walk(my_uuid)
+
+		mode = os.environ.get('BFG_VOLWALKER', 'shadow')
+		if mode not in ('v1', 'v2', 'shadow'):
+			raise Exception(f'BFG_VOLWALKER must be v1, v2 or shadow, not {mode!r}')
+		if mode != 'v1' and shutil.which('swipl') is None:
+			if mode == 'v2':
+				raise Exception('BFG_VOLWALKER=v2 but swipl is not installed')
+			logbfg.debug('swipl not installed, skipping volwalker2 shadow run')
+			mode = 'v1'
+
+		v1_res = v2_res = None
+		if mode in ('v1', 'shadow'):
+			v1_res = list(VolWalker(all_subvols2, direction).walk(my_uuid))
+		if mode in ('v2', 'shadow'):
+			try:
+				v2_res = list(s._volwalker2_candidates(all_subvols2, my_uuid, direction))
+			except Exception as e:
+				if mode == 'v2':
+					raise
+				logbfg.warning(f'volwalker2 shadow run failed: {e}')
+
+		if mode == 'shadow' and v2_res is not None:
+			s._volwalker_shadow_compare(all_subvols2, my_uuid, direction, v1_res, v2_res)
+
+		yield from (v2_res if mode == 'v2' else v1_res)
+
+
+	def _volwalker2_candidates(s, all_subvols2, my_uuid, direction):
+		"""
+		Run volwalker2 on the same input VolWalker gets: the machine labels
+		('local'/'remote'/'other') serve as its filesystem identifiers.
+		"""
+		by_uuid = {uuid: dict(x, fs_uuid=x['machine']) for uuid, x in all_subvols2.items()}
+		return volwalker2.common_parents(by_uuid, my_uuid, direction[1])
+
+
+	def _volwalker_shadow_compare(s, all_subvols2, my_uuid, direction, v1_res, v2_res):
+		"""
+		volwalker2 is a generalization of volwalker: it must find everything v1 finds
+		(plus multi-hop candidates v1 misses). Extras are logged as info, missing
+		candidates as a warning with the input dumped for turning into a test case.
+		"""
+		v1_uuids = set(x['local_uuid'] for x in v1_res)
+		v2_uuids = set(x['local_uuid'] for x in v2_res)
+		if v1_uuids == v2_uuids:
+			logbfg.debug(f'volwalker shadow: v1 and v2 agree on {len(v1_uuids)} candidate(s)')
+			return
+		extra = v2_uuids - v1_uuids
+		missing = v1_uuids - v2_uuids
+		if extra:
+			logbfg.info(f'volwalker shadow: volwalker2 found {len(extra)} additional candidate(s) (expected improvement): {sorted(extra)}')
+		if missing:
+			fn = f'/tmp/bfg_volwalker_mismatch_{time.strftime("%Y-%m-%d_%H-%M-%S")}.json'
+			logbfg.warning(f'volwalker shadow: volwalker2 MISSED {len(missing)} candidate(s) found by v1: {sorted(missing)}, dumping input to {fn}')
+			try:
+				with open(fn, 'w') as f:
+					json.dump({
+						'my_uuid': my_uuid,
+						'direction': list(direction),
+						'v1': sorted(v1_uuids),
+						'v2': sorted(v2_uuids),
+						'subvols': list(all_subvols2.values()),
+					}, f, default=datetime_to_json, indent=1)
+			except Exception as e:
+				logbfg.warning(f'could not dump volwalker mismatch: {e}')
 
 
 

@@ -73,11 +73,11 @@ def advisory_lock():
 	try:
 		log.info("Acquiring advisory lock...")
 		conn.execute(text("SELECT pg_advisory_lock(:key)"), {"key": BFG_LOCK_KEY})
-		log.info("Advisory lock acquired.")
+		log.debug("Advisory lock acquired.")
 		yield
 	finally:
 		conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": BFG_LOCK_KEY})
-		log.info("Advisory lock released.")
+		log.debug("Advisory lock released.")
 		conn.close()
 
 

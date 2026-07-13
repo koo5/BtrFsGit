@@ -10,6 +10,18 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 from btrfsgit import btrfsgit
+from btrfsgit import db as btrfsgit_db
+import contextlib
+
+
+def _delete_calls(mock_cmd):
+    """Return the snapshot paths that `mock_cmd` was asked to `btrfs subvolume delete`."""
+    paths = []
+    for c in mock_cmd.call_args_list:
+        args = c.args[0] if c.args else None
+        if isinstance(args, list) and [str(x) for x in args[:3]] == ["btrfs", "subvolume", "delete"]:
+            paths.append(str(args[3]))
+    return paths
 
 
 @pytest.fixture
@@ -22,8 +34,14 @@ def mock_bfg_for_pruning():
     bfg._remote_cmd = MagicMock(return_value="mock remote output")
     bfg.get_subvol = MagicMock(return_value=btrfsgit.Res({"local_uuid": "test-uuid"}))
     bfg._yes = MagicMock(return_value=True)
+    # exercise the pruning logic without needing a real database for the advisory lock
+    bfg._orig_advisory_lock = btrfsgit_db.advisory_lock
+    btrfsgit_db.advisory_lock = lambda: contextlib.nullcontext()
     
-    return bfg
+    try:
+        yield bfg
+    finally:
+        btrfsgit_db.advisory_lock = bfg._orig_advisory_lock
 
 
 def test_put_snapshots_into_buckets_with_real_dates():
@@ -96,16 +114,8 @@ def test_prune_local_with_mock_data(mock_bfg_for_pruning):
     # Call prune_local
     bfg.prune_local("/test/subvol", DB=True, DRY_RUN=False)
     
-    # Verify it tried to delete something
-    # Last snapshot in each bucket shouldn't be deleted, but others should
-    delete_calls = [
-        call for call in bfg._local_cmd.call_args_list 
-        if "btrfs subvolume delete" in str(call)
-    ]
-    
-    # Count should match prunable snapshots (not the last in each bucket)
-    # In our mock we have just one snapshot in each bucket, so nothing gets deleted
-    assert len(delete_calls) == 0
+    # With just one snapshot per bucket, nothing is prunable.
+    assert _delete_calls(bfg._local_cmd) == []
     
     # Test with more snapshots in one bucket
     now = datetime.now()
@@ -142,137 +152,91 @@ def test_prune_local_with_mock_data(mock_bfg_for_pruning):
     # Call prune_local
     bfg.prune_local("/test/subvol", DB=True, DRY_RUN=False)
     
-    # Verify it tried to delete the older snapshot in the under-1-min bucket
-    delete_calls = [
-        call for call in bfg._local_cmd.call_args_list 
-        if "btrfs subvolume delete" in str(call)
-    ]
-    assert len(delete_calls) == 1
+    # The older snapshot in the under-1-min bucket is the only prunable one.
+    assert _delete_calls(bfg._local_cmd) == [str(mock_snapshots[1]["path"])]
+
+
+def test_prune_local_thins_past_shared_parent(mock_bfg_for_pruning):
+    """
+    prune_local must keep the shared parent (MRC) and the newest snapshot, but should still
+    thin snapshots NEWER than the shared parent by the bucket policy (keep one per bucket).
+    Regression guard for dropping the old "stop at the first shared parent" early-return:
+    with the freeze this deletes nothing; with per-bucket thinning it deletes the extra
+    recent snapshot.
+    """
+    bfg = mock_bfg_for_pruning
+    now = datetime.now()
+
+    sp = {"path": Path("/snap/sp"), "dt": now - timedelta(days=30), "parent_uuid": "test-uuid"}       # shared parent, oldest
+    x1 = {"path": Path("/snap/x1"), "dt": now - timedelta(hours=2), "parent_uuid": "test-uuid"}        # newer than sp, extra in bucket
+    x2 = {"path": Path("/snap/x2"), "dt": now - timedelta(hours=1), "parent_uuid": "test-uuid"}        # newer than sp, newest in bucket
+    newest = {"path": Path("/snap/newest"), "dt": now - timedelta(minutes=5), "parent_uuid": "test-uuid"}
+    snaps = [sp, x1, x2, newest]
+
+    bfg.all_subvols_from_db = MagicMock(return_value=snaps)
+    bfg.local_bfg_snapshots = MagicMock(return_value=snaps)
+    bfg.most_recent_common_snapshots = MagicMock(return_value=[sp])  # sp is the shared parent
+    # deterministic buckets, oldest first; x1 and x2 share a bucket so one of them is prunable
+    bfg.put_snapshots_into_buckets = MagicMock(return_value={
+        "month": [sp],
+        "hour": [x1, x2],
+        "minute": [newest],
+    })
+
+    bfg.prune_local("/test/subvol", DB=True, DRY_RUN=False)
+
+    deleted = _delete_calls(bfg._local_cmd)
+    # x1 is newer than the shared parent, not the newest, and not the last in its bucket -> prunable.
+    assert deleted == [str(x1["path"])], deleted
+    # the shared parent, its bucket's newest sibling, and the overall newest are all kept
+    assert str(sp["path"]) not in deleted
+    assert str(x2["path"]) not in deleted
+    assert str(newest["path"]) not in deleted
 
 
 def test_prune_remote_with_mock_data(mock_bfg_for_pruning):
-    """Test the prune_remote method with mock data."""
+    """
+    prune_remote keeps the most recent common snapshot (the send parent on the backup fs) and
+    the newest, and thins everything else per bucket - including snapshots newer than the shared
+    parent, just like prune_local (no early-return / freeze).
+    """
     bfg = mock_bfg_for_pruning
-    
-    # Create mock snapshots
     now = datetime.now()
-    mock_local_snapshots = [
-        {
-            "path": Path("/local/snap1"),
-            "dt": now - timedelta(seconds=30),
-            "parent_uuid": "test-uuid",
-            "local_uuid": "local-uuid1"
-        }
-    ]
-    
-    mock_remote_snapshots = [
-        {
-            "path": Path("/remote/snap1"),
-            "dt": now - timedelta(seconds=30),
-            "received_uuid": "local-uuid1",
-            "local_uuid": "remote-uuid1"
-        },
-        {
-            "path": Path("/remote/snap2"),
-            "dt": now - timedelta(minutes=30),
-            "received_uuid": None,
-            "local_uuid": "remote-uuid2"
-        },
-        {
-            "path": Path("/remote/snap3"),
-            "dt": now - timedelta(hours=2),
-            "received_uuid": None,
-            "local_uuid": "remote-uuid3"
-        }
-    ]
-    
-    # Mock methods that prune_remote depends on
-    bfg.all_subvols_from_db = MagicMock(return_value=mock_local_snapshots + mock_remote_snapshots)
-    bfg.most_recent_common_snapshots = MagicMock(return_value=[mock_local_snapshots[0]])
-    bfg.remote_bfg_snapshots = MagicMock(return_value=mock_remote_snapshots)
-    
-    # Set up mocked remote_fs_uuid
-    bfg.remote_fs_uuid = MagicMock(return_value=("remote-fs-uuid", Path("/remote/fs")))
-    
-    # Set up mocked bucket function to use fixed buckets
+
+    # snapshots on the remote backup filesystem (fs_uuid = "remote-fs")
+    r_old1 = {"path": Path("/remote/old1"), "dt": now - timedelta(days=40), "received_uuid": "s-old1", "local_uuid": "r-old1", "fs_uuid": "remote-fs"}
+    r_old2 = {"path": Path("/remote/old2"), "dt": now - timedelta(days=35), "received_uuid": "s-old2", "local_uuid": "r-old2", "fs_uuid": "remote-fs"}
+    r_mrc = {"path": Path("/remote/mrc"), "dt": now - timedelta(days=10), "received_uuid": "s-mrc", "local_uuid": "r-mrc", "fs_uuid": "remote-fs"}
+    r_new1 = {"path": Path("/remote/new1"), "dt": now - timedelta(hours=2), "received_uuid": "s-new1", "local_uuid": "r-new1", "fs_uuid": "remote-fs"}
+    r_new2 = {"path": Path("/remote/new2"), "dt": now - timedelta(hours=1), "received_uuid": "s-new2", "local_uuid": "r-new2", "fs_uuid": "remote-fs"}
+    r_newest = {"path": Path("/remote/newest"), "dt": now - timedelta(minutes=5), "received_uuid": "s-newest", "local_uuid": "r-newest", "fs_uuid": "remote-fs"}
+    remote_snaps = [r_old1, r_old2, r_mrc, r_new1, r_new2, r_newest]
+
+    # the local most-recent-common snapshot; its received copy on the remote is r_mrc
+    local_mrc = {"path": Path("/local/mrc"), "local_uuid": "s-mrc", "fs_uuid": "local-fs"}
+
+    bfg.all_subvols_from_db = MagicMock(return_value=remote_snaps + [local_mrc])
+    bfg.most_recent_common_snapshots = MagicMock(return_value=[local_mrc])
+    bfg.remote_fs_uuid = MagicMock(return_value=("remote-fs", Path("/remote/fs")))
+    bfg.remote_bfg_snapshots = MagicMock(return_value=remote_snaps)
+    # deterministic buckets, oldest first: two old snapshots share a bucket, the shared parent is
+    # alone, and two recent snapshots (newer than the shared parent) share a bucket.
     bfg.put_snapshots_into_buckets = MagicMock(return_value={
-        "under-1-min": [mock_remote_snapshots[0]],
-        "minute-bucket": [mock_remote_snapshots[1]],
-        "hour-bucket": [mock_remote_snapshots[2]]
+        "month": [r_old1, r_old2],
+        "mrc": [r_mrc],
+        "hour": [r_new1, r_new2],
+        "minute": [r_newest],
     })
-    
-    # Call prune_remote
-    bfg.prune_remote(
-        LOCAL_SUBVOL="/local/subvol",
-        REMOTE_SUBVOL="/remote/subvol",
-        DRY_RUN=False
-    )
-    
-    # Verify it tried to delete something
-    # The first snapshot is an MRC so it shouldn't be deleted
-    delete_calls = [
-        call for call in bfg._remote_cmd.call_args_list 
-        if "btrfs subvolume delete" in str(call)
-    ]
-    
-    # We should have tried to delete the non-MRC snapshots that aren't the last in their bucket
-    # In this case, we have only one snapshot per bucket, so nothing gets deleted
-    assert len(delete_calls) == 0
-    
-    # Test with more snapshots where some should be pruned
-    now = datetime.now()
-    mock_remote_snapshots = [
-        # MRC snapshot - should be kept
-        {
-            "path": Path("/remote/snap1"),
-            "dt": now - timedelta(seconds=30),
-            "received_uuid": "local-uuid1",
-            "local_uuid": "remote-uuid1"
-        },
-        # Another snapshot in the same bucket - should be pruned
-        {
-            "path": Path("/remote/snap2"),
-            "dt": now - timedelta(seconds=40),
-            "received_uuid": None,
-            "local_uuid": "remote-uuid2"
-        },
-        # Last snapshot in its bucket - should be kept
-        {
-            "path": Path("/remote/snap3"),
-            "dt": now - timedelta(hours=2),
-            "received_uuid": None,
-            "local_uuid": "remote-uuid3"
-        }
-    ]
-    
-    # Reset mocks
-    bfg._remote_cmd.reset_mock()
-    bfg.remote_bfg_snapshots = MagicMock(return_value=mock_remote_snapshots)
-    
-    # Set up mocked bucket function with the new snapshots
-    bfg.put_snapshots_into_buckets = MagicMock(return_value={
-        "under-1-min": [mock_remote_snapshots[1], mock_remote_snapshots[0]],  # Older first
-        "hour-bucket": [mock_remote_snapshots[2]]
-    })
-    
-    # Mock most_recent_common_snapshots to return the first snapshot as MRC
-    bfg.most_recent_common_snapshots = MagicMock(return_value=[
-        {"path": Path("/remote/snap1"), "local_uuid": "remote-uuid1"}
-    ])
-    
-    # Call prune_remote
-    bfg.prune_remote(
-        LOCAL_SUBVOL="/local/subvol",
-        REMOTE_SUBVOL="/remote/subvol",
-        DRY_RUN=False
-    )
-    
-    # The MRC check should prevent any deletion
-    delete_calls = [
-        call for call in bfg._remote_cmd.call_args_list 
-        if "btrfs subvolume delete" in str(call)
-    ]
-    assert len(delete_calls) == 0
+
+    bfg.prune_remote(LOCAL_SUBVOL="/local/subvol", REMOTE_SUBVOL="/remote/subvol", DRY_RUN=False)
+
+    deleted = _delete_calls(bfg._remote_cmd)
+    # r_old1 (extra in the month bucket) AND r_new1 (extra in the recent bucket, newer than the
+    # shared parent) are both pruned - prune_remote thins past the shared parent, like prune_local.
+    assert deleted == [str(r_old1["path"]), str(r_new1["path"])], deleted
+    assert str(r_mrc["path"]) not in deleted         # shared parent kept
+    assert str(r_new2["path"]) not in deleted        # newest in its bucket kept
+    assert str(r_newest["path"]) not in deleted      # overall newest kept
 
 
 @pytest.mark.integration
