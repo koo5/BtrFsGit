@@ -34,14 +34,19 @@ def mock_bfg_for_pruning():
     bfg._remote_cmd = MagicMock(return_value="mock remote output")
     bfg.get_subvol = MagicMock(return_value=btrfsgit.Res({"local_uuid": "test-uuid"}))
     bfg._yes = MagicMock(return_value=True)
-    # exercise the pruning logic without needing a real database for the advisory lock
-    bfg._orig_advisory_lock = btrfsgit_db.advisory_lock
+    # exercise the pruning logic without needing a real database: null the advisory
+    # lock and record (instead of executing) the marking of deleted db rows
+    orig_advisory_lock = btrfsgit_db.advisory_lock
+    orig_mark_deleted = btrfsgit_db.mark_deleted
     btrfsgit_db.advisory_lock = lambda: contextlib.nullcontext()
-    
+    bfg.marked_deleted = []
+    btrfsgit_db.mark_deleted = lambda uuids: bfg.marked_deleted.extend(uuids)
+
     try:
         yield bfg
     finally:
-        btrfsgit_db.advisory_lock = bfg._orig_advisory_lock
+        btrfsgit_db.advisory_lock = orig_advisory_lock
+        btrfsgit_db.mark_deleted = orig_mark_deleted
 
 
 def test_put_snapshots_into_buckets_with_real_dates():
@@ -102,7 +107,7 @@ def test_prune_local_with_mock_data(mock_bfg_for_pruning):
     # Mock methods that prune_local depends on
     bfg.all_subvols_from_db = MagicMock(return_value=mock_snapshots)
     bfg.most_recent_common_snapshots = MagicMock(return_value=[])
-    bfg.local_bfg_snapshots = MagicMock(return_value=mock_snapshots)
+    bfg.get_local_bfg_snapshots = MagicMock(return_value=btrfsgit.Res(mock_snapshots))
     
     # Set up mocked bucket function to use fixed buckets
     bfg.put_snapshots_into_buckets = MagicMock(return_value={
@@ -141,7 +146,7 @@ def test_prune_local_with_mock_data(mock_bfg_for_pruning):
     
     # Reset mocks
     bfg._local_cmd.reset_mock()
-    bfg.local_bfg_snapshots = MagicMock(return_value=mock_snapshots)
+    bfg.get_local_bfg_snapshots = MagicMock(return_value=btrfsgit.Res(mock_snapshots))
     
     # Set up mocked bucket function to use fixed buckets with multiple snapshots
     bfg.put_snapshots_into_buckets = MagicMock(return_value={
@@ -174,7 +179,7 @@ def test_prune_local_thins_past_shared_parent(mock_bfg_for_pruning):
     snaps = [sp, x1, x2, newest]
 
     bfg.all_subvols_from_db = MagicMock(return_value=snaps)
-    bfg.local_bfg_snapshots = MagicMock(return_value=snaps)
+    bfg.get_local_bfg_snapshots = MagicMock(return_value=btrfsgit.Res(snaps))
     bfg.most_recent_common_snapshots = MagicMock(return_value=[sp])  # sp is the shared parent
     # deterministic buckets, oldest first; x1 and x2 share a bucket so one of them is prunable
     bfg.put_snapshots_into_buckets = MagicMock(return_value={
@@ -352,3 +357,145 @@ def test_pruning_integration(btrfs_loopback_setup):
     
     # We should have only 1 snapshot left in this bucket (the newest one)
     assert len(same_bucket_pruned) == 1
+
+"""
+snapshot-pile (series) commands: prune/clean/report_snapshots and _fs
+"""
+
+
+def _member(path, uuid, received, dt):
+    return {'path': Path(path), 'local_uuid': uuid, 'received_uuid': received,
+            'parent_uuid': None, 'ro': True, 'dt': dt, 'subvol_id': 0}
+
+
+def test_parse_snapshot_name():
+    bfg = btrfsgit.Bfg(YES=True)
+    p = bfg.parse_snapshot_name('dev3_2026-06-22_08-15-49_from_jj')
+    assert p['name'] == 'dev3'
+    assert p['dt'] == datetime(2026, 6, 22, 8, 15, 49)
+    assert p['tags'] == 'from_jj'
+    legacy = bfg.parse_snapshot_name('data_bfg_snapshots_2023-05-10_10-00-00_tag')
+    assert legacy['name'] == 'data'
+    with pytest.raises(Exception):
+        bfg.parse_snapshot_name('nonsense')
+
+
+def test_shared_snapshots_protects_newest_shared_per_fs(mock_bfg_for_pruning):
+    bfg = mock_bfg_for_pruning
+    now = datetime.now()
+    # three received members; their content identities are the origin uuids o1..o3
+    m1 = _member('/bac/.bfg_snapshots/dev3/dev3_a', 'r1', 'o1', now - timedelta(days=3))
+    m2 = _member('/bac/.bfg_snapshots/dev3/dev3_b', 'r2', 'o2', now - timedelta(days=2))
+    m3 = _member('/bac/.bfg_snapshots/dev3/dev3_c', 'r3', 'o3', now - timedelta(days=1))
+    rows = [
+        # the origin fs still holds o1 and o2; o3's origin snapshot is gone
+        {'fs_uuid': 'd2fs', 'host': 'jj', 'fs': '/d2', 'local_uuid': 'o1', 'received_uuid': None},
+        {'fs_uuid': 'd2fs', 'host': 'jj', 'fs': '/d2', 'local_uuid': 'o2', 'received_uuid': None},
+        # an offsite fs holds a copy of o1 only
+        {'fs_uuid': 'bac9fs', 'host': 'bac9', 'fs': '/bac9', 'local_uuid': 'x1', 'received_uuid': 'o1'},
+        # rows on our own fs must be ignored
+        {'fs_uuid': 'bacfs', 'host': 'jj', 'fs': '/bac', 'local_uuid': 'r1', 'received_uuid': 'o1'},
+    ]
+    shared = bfg._shared_snapshots(rows, 'bacfs', [m1, m2, m3])
+    # newest member shared with the origin fs is m2; newest shared with bac9 is m1;
+    # m3 is shared with nothing (its origin was pruned away) so it is not protected
+    assert shared == {
+        m2['path']: ['jj:/d2'],
+        m1['path']: ['bac9:/bac9'],
+    }
+
+
+def _flat_listing(now):
+    """two series (dev3, home) flat in one .bfg_snapshots dir, plus ignorable entries"""
+    dev3 = [_member(f'/bac/.bfg_snapshots/dev3_2026-06-{d:02d}_00-00-00_t', f'd{d}', f'od{d}',
+                    now - timedelta(days=30 - d)) for d in range(1, 11)]
+    home = [_member(f'/bac/.bfg_snapshots/home_2026-06-{d:02d}_00-00-00_t', f'h{d}', f'oh{d}',
+                    now - timedelta(days=20 - d)) for d in range(1, 5)]
+    other = [
+        # rw subvol: ignored
+        {'path': Path('/bac/backups/jj/dev3'), 'local_uuid': 'rw1', 'received_uuid': None,
+         'parent_uuid': None, 'ro': False, 'subvol_id': 0},
+    ]
+    return dev3, home, dev3 + home + other
+
+
+def test_clean_snapshots_splits_series_and_spares_shared(mock_bfg_for_pruning):
+    bfg = mock_bfg_for_pruning
+    now = datetime.now()
+    dev3, home, listing = _flat_listing(now)
+    bfg._get_subvolumes = MagicMock(return_value=listing)
+    bfg.local_fs_uuid = MagicMock(return_value='bacfs')
+    # the origin fs still holds the content of dev3[2] -> newest shared, protected
+    bfg.all_subvols_from_db = MagicMock(return_value=[
+        {'fs_uuid': 'd2fs', 'host': 'jj', 'fs': '/d2', 'local_uuid': 'od3', 'received_uuid': None},
+    ])
+
+    bfg.clean_snapshots('/bac/.bfg_snapshots', PERCENT=50, DB=True, DRY_RUN=False)
+
+    deleted = _delete_calls(bfg._local_cmd)
+    # dev3: oldest 5 of 10 considered, dev3[2] spared as shared -> d1, d2, d4, d5 deleted.
+    # home: oldest 2 of 4 considered, nothing shared -> h1, h2 deleted.
+    expected = [str(dev3[i]['path']) for i in (0, 1, 3, 4)] + [str(home[i]['path']) for i in (0, 1)]
+    assert deleted == expected, deleted
+    # ...and each deletion was flagged in the db, so other machines don't see phantom rows
+    assert bfg.marked_deleted == ['d1', 'd2', 'd4', 'd5', 'h1', 'h2']
+
+
+def test_prune_fs_thins_each_series(mock_bfg_for_pruning):
+    bfg = mock_bfg_for_pruning
+    now = datetime.now()
+    dev3, home, listing = _flat_listing(now)
+    bfg._get_subvolumes = MagicMock(return_value=listing)
+    bfg.local_fs_uuid = MagicMock(return_value='bacfs')
+    bfg.all_subvols_from_db = MagicMock(return_value=[])
+    # deterministic buckets per series: everything in one bucket -> keep only the last
+    bfg.put_snapshots_into_buckets = MagicMock(side_effect=lambda snaps: {'bucket': list(snaps)})
+
+    bfg.prune_fs('/bac', DB=True, DRY_RUN=False)
+
+    deleted = _delete_calls(bfg._local_cmd)
+    # per series, everything but the last-in-bucket (= newest) goes
+    expected = [str(x['path']) for x in dev3[:-1]] + [str(x['path']) for x in home[:-1]]
+    assert deleted == expected, deleted
+
+
+def test_snapshots_dry_run_deletes_nothing(mock_bfg_for_pruning):
+    bfg = mock_bfg_for_pruning
+    now = datetime.now()
+    _, _, listing = _flat_listing(now)
+    bfg._get_subvolumes = MagicMock(return_value=listing)
+    bfg.local_fs_uuid = MagicMock(return_value='bacfs')
+    bfg.all_subvols_from_db = MagicMock(return_value=[])
+
+    bfg.clean_snapshots('/bac/.bfg_snapshots', PERCENT=100, DB=True, DRY_RUN=True)
+    bfg.prune_fs('/bac', DB=True, DRY_RUN=True)
+
+    assert _delete_calls(bfg._local_cmd) == []
+
+
+def test_delete_failure_does_not_abort(mock_bfg_for_pruning):
+    """A snapshot vanishing between listing and deletion (concurrent backup run) must be
+    logged and skipped, not kill the whole prune/clean pipeline."""
+    bfg = mock_bfg_for_pruning
+    now = datetime.now()
+    snaps = [
+        {"path": Path(f"/snap/s{i}"), "dt": now - timedelta(days=10 - i), "parent_uuid": "test-uuid"}
+        for i in range(4)
+    ]
+    bfg.all_subvols_from_db = MagicMock(return_value=[])
+    bfg.most_recent_common_snapshots = MagicMock(return_value=[])
+    bfg.get_local_bfg_snapshots = MagicMock(return_value=btrfsgit.Res(snaps))
+    bfg.put_snapshots_into_buckets = MagicMock(return_value={"bucket": list(snaps)})
+    # every delete fails (returns -1, as _local_cmd does with die_on_error=False)
+    bfg._local_cmd = MagicMock(return_value=-1)
+
+    bfg.prune_local("/test/subvol", DB=True, DRY_RUN=False)  # must not raise or exit
+
+    # all three prunable snapshots were attempted despite each attempt failing
+    assert len(_delete_calls(bfg._local_cmd)) == 3
+
+    # clean path: same tolerance
+    bfg._local_cmd.reset_mock()
+    bfg._shared_parents = MagicMock(return_value={})
+    bfg.clean_local("/test/subvol", PERCENT=100, DB=True, DRY_RUN=False)
+    assert len(_delete_calls(bfg._local_cmd)) == 3

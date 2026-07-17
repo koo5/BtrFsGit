@@ -538,20 +538,26 @@ class Bfg:
 		return SNAPSHOT
 
 
-	def snapshot_dt(s, snapshot):
-		logbfg.debug(f'snapshot_dt {snapshot=}')
-		dname = snapshot['path'].name
-		# Typical pattern might be:
-		#   <subvol>_bfg_snapshots_<timestamp>_<tag>
-		#   <subvol>_<timestamp>_<tag>
-		# We'll attempt to capture all via two regex tries:
-
+	def parse_snapshot_name(s, dname):
+		"""
+		parse a snapshot name into its parts: {'name': <series/subvol name>, 'dt': <datetime>,
+		'tags': <tag>}. Typical patterns:
+		  <subvol>_bfg_snapshots_<timestamp>_<tag>   (legacy)
+		  <subvol>_<timestamp>_<tag>
+		"""
 		m = re.match(r'(.+)_bfg_snapshots_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
 		if m is None:
 			m = re.match(r'(.+)_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
 		if m is None:
 			raise Exception(f'could not parse snapshot folder: {dname}')
-		return datetime.strptime(m.group(2), "%Y-%m-%d_%H-%M-%S")
+		return {'name': m.group(1),
+				'dt': datetime.strptime(m.group(2), "%Y-%m-%d_%H-%M-%S"),
+				'tags': m.group(3)}
+
+
+	def snapshot_dt(s, snapshot):
+		logbfg.debug(f'snapshot_dt {snapshot=}')
+		return s.parse_snapshot_name(snapshot['path'].name)['dt']
 
 
 	def calculate_default_snapshot_parent_dir(s, machine: str, SUBVOL):
@@ -855,10 +861,11 @@ class Bfg:
 			mrcs = set([x['path'] for x in s.most_recent_common_snapshots(all, SUBVOL)])
 			logbfg.debug(f"{mrcs=}")
 		else:
-			all = []
 			mrcs = set()
 
-		local_snapshots = s.local_bfg_snapshots(all, SUBVOL)
+		# use the live list of snapshots (not the db) so we only ever try to delete
+		# snapshots that actually still exist - the db lags behind concurrent backup runs
+		local_snapshots = s.get_local_bfg_snapshots(SUBVOL).val
 		local_snapshots = sorted(local_snapshots, key=lambda x: x['dt'])
 
 		if len(local_snapshots) == 0:
@@ -867,7 +874,14 @@ class Bfg:
 
 		newest = local_snapshots[-1]['path']
 
-		for d in s._prune_decisions(local_snapshots, mrcs, newest):
+		s._delete_prunable(s._prune_decisions(local_snapshots, mrcs, newest), DRY_RUN, s._local_cmd)
+
+
+	def _delete_prunable(s, decisions, DRY_RUN, runner):
+		"""log each retention decision and delete the prunable snapshots (shared by
+		_prune_local, _prune_remote and the series commands - they differ only in the runner)"""
+		deleted_uuids = []
+		for d in decisions:
 			path = d['snap']['path']
 			logbfg.info(f"  {path} - {d['reason']}")
 
@@ -875,10 +889,31 @@ class Bfg:
 				cmd = ['btrfs', 'subvolume', 'delete', str(path)]
 				if not s._yes(shlex.join(cmd)):
 					continue
-				s._local_cmd(cmd)
+				if runner(cmd, die_on_error=False) == -1:
+					# e.g. already deleted by a concurrently running backup's prune
+					logbfg.warning(f"could not delete {path} (deleted concurrently?), continuing")
+					continue
+				deleted_uuids.append(d['snap'].get('local_uuid'))
 				_prerr(f"Deleted snapshot: {path}")
 
+		s._mark_deleted_in_db(deleted_uuids)
 		_prerr("Done pruning.")
+
+
+	def _mark_deleted_in_db(s, local_uuids):
+		"""
+		Best-effort: flag just-deleted snapshots in the db, so that other machines
+		computing shared parents between two update_db runs don't base their
+		decisions on phantom rows.
+		"""
+		local_uuids = [u for u in local_uuids if u]
+		if not local_uuids:
+			return
+		try:
+			db.mark_deleted(local_uuids)
+			logbfg.debug(f'marked {len(local_uuids)} snapshot(s) deleted in db')
+		except Exception as e:
+			logbfg.warning(f'could not mark {len(local_uuids)} deleted snapshot(s) in db: {e}')
 
 
 	def _prune_decisions(s, local_snapshots_sorted, mrcs, newest):
@@ -948,11 +983,6 @@ class Bfg:
 
 	def _clean_local(s, SUBVOL, PERCENT, DB, DRY_RUN):
 
-		PERCENT = float(PERCENT)
-		if PERCENT < 0 or PERCENT > 100:
-			_prerr(f'PERCENT must be between 0 and 100, got {PERCENT}')
-			sys.exit(1)
-
 		logbfg.info(f"Cleaning snapshots for {SUBVOL=} (oldest {PERCENT}%)")
 		logbfg.debug(f'{DB=} {DRY_RUN=}')
 
@@ -965,28 +995,44 @@ class Bfg:
 		if not DB:
 			logbfg.warning("clean_local with DB=False: cannot identify shared parents; "
 						   "nothing will be protected except the newest snapshot!")
-		logbfg.info(f"protecting {len(protected)} shared parent snapshot(s):")
-		for p, labels in protected.items():
-			logbfg.info(f"  keep (shared parent -> {'; '.join(labels)}): {p}")
 
 		# use the live list of snapshots (not the db) so we only ever try to delete snapshots
 		# that actually still exist - e.g. after a prune has just run in the same pipeline.
 		local_snapshots = s.get_local_bfg_snapshots(SUBVOL).val
 		local_snapshots = sorted(local_snapshots, key=lambda x: x['dt'])
 
-		n = len(local_snapshots)
-		if n == 0:
+		if len(local_snapshots) == 0:
 			logbfg.info(f"No snapshots to clean for {SUBVOL}")
 			return
 
+		s._clean_snapshots(local_snapshots, protected, PERCENT, DRY_RUN)
+
+
+	def _clean_snapshots(s, snapshots, protected, PERCENT, DRY_RUN):
+		"""
+		shared core of clean_local/clean_snapshots/clean_fs: delete the oldest PERCENT% of
+		`snapshots` (a non-empty list sorted oldest first), sparing the protected ones
+		(a map of path -> list of "host:fs" labels they are shared with) and the newest.
+		"""
+		PERCENT = float(PERCENT)
+		if PERCENT < 0 or PERCENT > 100:
+			_prerr(f'PERCENT must be between 0 and 100, got {PERCENT}')
+			sys.exit(1)
+
+		logbfg.info(f"protecting {len(protected)} shared parent snapshot(s):")
+		for p, labels in protected.items():
+			logbfg.info(f"  keep (shared parent -> {'; '.join(labels)}): {p}")
+
+		n = len(snapshots)
 		# always keep the newest snapshot
-		newest = local_snapshots[-1]['path']
+		newest = snapshots[-1]['path']
 
 		count_to_clean = int(n * PERCENT / 100.0)
 		logbfg.info(f"{n} snapshot(s) total, considering the oldest {count_to_clean} for cleaning")
 
 		deleted = 0
-		for i, snap in enumerate(local_snapshots):
+		deleted_uuids = []
+		for i, snap in enumerate(snapshots):
 			if i >= count_to_clean:
 				break
 			path = snap['path']
@@ -1008,10 +1054,15 @@ class Bfg:
 				cmd = ['btrfs', 'subvolume', 'delete', str(path)]
 				if not s._yes(shlex.join(cmd)):
 					continue
-				s._local_cmd(cmd)
+				if s._local_cmd(cmd, die_on_error=False) == -1:
+					# e.g. already deleted by a concurrently running backup's prune
+					logbfg.warning(f"could not delete {path} (deleted concurrently?), continuing")
+					continue
 				deleted += 1
+				deleted_uuids.append(snap.get('local_uuid'))
 				_prerr(f"Deleted snapshot: {path}")
 
+		s._mark_deleted_in_db(deleted_uuids)
 		_prerr(f"Done cleaning. Deleted {deleted} snapshot(s).")
 
 
@@ -1065,15 +1116,25 @@ class Bfg:
 		:param DB: use the db to detect shared parents (as clean/prune do)
 		:param ALL: list every snapshot instead of collapsing the uninteresting kept ones
 		"""
-		PERCENT = float(PERCENT)
 		s._subvol_uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
 
 		shared = s._shared_parents(SUBVOL) if DB else {}
 
 		snapshots = sorted(s.get_local_bfg_snapshots(SUBVOL).val, key=lambda x: x['dt'])
+		heading = f'subvol: {SUBVOL}' + ('' if DB else ' (DB disabled - shared parents unknown)')
+		s._report_snapshots(heading, snapshots, shared, PERCENT, ALL)
+
+
+	def _report_snapshots(s, heading, snapshots, shared, PERCENT, ALL):
+		"""
+		shared core of report_local/report_snapshots/report_fs (read-only): print the
+		prune+clean plan for `snapshots` (sorted oldest first), with `shared` mapping
+		protected paths to the "host:fs" labels they are shared with.
+		"""
+		PERCENT = float(PERCENT)
 		n = len(snapshots)
 
-		print(f'subvol: {SUBVOL}   ({n} snapshot(s)' + ('' if DB else ', DB disabled - shared parents unknown') + ')')
+		print(f'{heading}   ({n} snapshot(s))')
 		if n == 0:
 			return
 
@@ -1155,6 +1216,149 @@ class Bfg:
 		n_keep = n - len(prune_drop) - len(clean_drop)
 		print(f'summary: {n} snapshots: {len(prune_drop)} prune, {len(clean_drop)} clean, '
 			  f'{n_shared} shared-parent kept, {n_keep} kept total')
+
+
+	"""
+	snapshot-pile commands, addressed by location rather than by origin subvolume.
+
+	Backup targets hold piles of received snapshots (e.g.
+	/bac20/backups/jj/.bfg_snapshots/dev3/dev3_<ts>_<tag>) for which no origin
+	subvolume exists on this filesystem, so the *_local commands don't apply.
+	These commands find snapshot series by naming convention - grouped by
+	(parent directory, series name), which covers both the received layout
+	(.bfg_snapshots/<subvol>/<subvol>_<ts>_<tag>) and the flat local layout
+	(.bfg_snapshots/<subvol>_<ts>_<tag>) - and protect, per series:
+	 - for each other filesystem that holds a copy of a member's content, the
+	   newest such shared member (the receive-side counterpart of the shared
+	   parent, needed so future incremental sends/receives keep working), and
+	 - the newest member.
+	Content identity comes from the db, by propagated origin uuid (received_uuid
+	if set, the snapshot's own uuid otherwise).
+	"""
+
+	def prune_snapshots(s, PARENT_DIR, DB=True, DRY_RUN=False):
+		"""
+		Apply prune_local's time-bucketed retention policy to each snapshot series found
+		directly inside PARENT_DIR, e.g. /bac20/backups/jj/.bfg_snapshots/dev3.
+		"""
+		with db.advisory_lock():
+			for key, members, protected in s._snapshot_series(PARENT_DIR, PARENT_DIR, DB):
+				s._delete_prunable(s._prune_decisions(members, set(protected), members[-1]['path']), DRY_RUN, s._local_cmd)
+
+
+	def clean_snapshots(s, PARENT_DIR, PERCENT=30, DB=True, DRY_RUN=False):
+		"""
+		Apply clean_local's oldest-PERCENT% policy to each snapshot series found directly
+		inside PARENT_DIR, sparing shared and newest members (see class of commands above).
+		"""
+		with db.advisory_lock():
+			for key, members, protected in s._snapshot_series(PARENT_DIR, PARENT_DIR, DB):
+				s._clean_snapshots(members, protected, PERCENT, DRY_RUN)
+
+
+	def report_snapshots(s, PARENT_DIR, PERCENT=30, DB=True, ALL=False):
+		"""
+		Read-only: the report_local table for each snapshot series found directly inside
+		PARENT_DIR. Nothing is deleted.
+		"""
+		for key, members, protected in s._snapshot_series(PARENT_DIR, PARENT_DIR, DB):
+			s._report_snapshots(s._series_heading(key, DB), members, protected, PERCENT, ALL)
+
+
+	def prune_fs(s, FS, DB=True, DRY_RUN=False):
+		"""prune_snapshots for every snapshot series on the whole filesystem FS."""
+		with db.advisory_lock():
+			for key, members, protected in s._snapshot_series(FS, None, DB):
+				logbfg.info(f"Pruning series {key[0]}/{key[1]}*")
+				s._delete_prunable(s._prune_decisions(members, set(protected), members[-1]['path']), DRY_RUN, s._local_cmd)
+
+
+	def clean_fs(s, FS, PERCENT=30, DB=True, DRY_RUN=False):
+		"""clean_snapshots for every snapshot series on the whole filesystem FS."""
+		with db.advisory_lock():
+			for key, members, protected in s._snapshot_series(FS, None, DB):
+				logbfg.info(f"Cleaning series {key[0]}/{key[1]}*")
+				s._clean_snapshots(members, protected, PERCENT, DRY_RUN)
+
+
+	def report_fs(s, FS, PERCENT=30, DB=True, ALL=False):
+		"""Read-only: the report_local table for every snapshot series on the filesystem FS."""
+		for key, members, protected in s._snapshot_series(FS, None, DB):
+			s._report_snapshots(s._series_heading(key, DB), members, protected, PERCENT, ALL)
+
+
+	def _series_heading(s, key, DB):
+		parent_dir, name = key
+		return f'series: {parent_dir}/{name}*' + ('' if DB else ' (DB disabled - shared parents unknown)')
+
+
+	def _snapshot_series(s, path, restrict_dir, DB):
+		"""
+		Discover snapshot series: read-only subvols under a .bfg_snapshots directory, from
+		the live btrfs listing, grouped by (parent directory, series name) and sorted oldest
+		first. Yields ((parent_dir, name), members, protected) per series; protected is the
+		shared-content map from _shared_snapshots ({} when DB is off). restrict_dir limits
+		the result to series directly inside that directory; None means the whole filesystem.
+		"""
+		path = Path(path).absolute()
+		if restrict_dir is not None:
+			restrict_dir = Path(restrict_dir).absolute()
+
+		groups = defaultdict(list)
+		for x in s._get_subvolumes(s._local_cmd, path, 'local'):
+			if not x['ro'] or '.bfg_snapshots' not in x['path'].parts:
+				continue
+			if restrict_dir is not None and x['path'].parent != restrict_dir:
+				continue
+			name = s.parse_snapshot_name(x['path'].name)['name']
+			groups[(x['path'].parent, name)].append(x)
+
+		if not groups:
+			logbfg.info(f'no snapshot series found in {restrict_dir if restrict_dir is not None else path}')
+			return
+
+		all_rows = s.all_subvols_from_db() if DB else []
+		my_fs_uuid = s.local_fs_uuid(path) if DB else None
+		if not DB:
+			logbfg.warning("DB=False: cannot identify shared snapshots; "
+						   "nothing will be protected except the newest of each series!")
+
+		for key in sorted(groups, key=lambda k: (str(k[0]), k[1])):
+			members = sorted(groups[key], key=lambda x: x['dt'])
+			protected = s._shared_snapshots(all_rows, my_fs_uuid, members) if DB else {}
+			logbfg.info(f'series {key[0]}/{key[1]}*: {len(members)} snapshot(s), {len(protected)} shared')
+			yield key, members, protected
+
+
+	def _shared_snapshots(s, all_rows, my_fs_uuid, members):
+		"""
+		Map member path -> list of "host:fs" labels of other filesystems that hold a copy
+		of that member's content according to the db, keeping only the newest shared member
+		per other filesystem. Content identity is the propagated origin uuid: received_uuid
+		if set (as on received snapshots), the snapshot's own uuid otherwise.
+		"""
+		def content_key(x):
+			return x['received_uuid'] or x['local_uuid']
+
+		fss_by_key = defaultdict(set)
+		hosts_by_fs = defaultdict(set)
+		for row in all_rows:
+			if row['fs_uuid'] == my_fs_uuid:
+				continue
+			fss_by_key[content_key(row)].add(row['fs_uuid'])
+			hosts_by_fs[row['fs_uuid']].add(row['host'])
+
+		# members come oldest first, so the last write per filesystem wins
+		newest_shared = {}
+		for m in members:
+			for fs_uuid in fss_by_key.get(content_key(m), ()):
+				newest_shared[fs_uuid] = m
+
+		result = {}
+		for fs_uuid, m in newest_shared.items():
+			label = s._remote_fs_label(all_rows, fs_uuid, hosts_by_fs[fs_uuid])
+			result.setdefault(m['path'], []).append(label)
+		return result
 
 
 	def prune_remote(s, LOCAL_SUBVOL, REMOTE_SUBVOL, DRY_RUN=False):

@@ -63,6 +63,20 @@ def session():
 	return session
 
 
+def mark_deleted(local_uuids):
+	"""
+	Flag snapshots as deleted in the db, by local_uuid. Called right after subvolumes
+	are actually deleted, so that other machines computing shared parents between two
+	update_db runs don't base their decisions on phantom rows.
+	"""
+	if not local_uuids:
+		return
+	s = session()
+	with s.begin():
+		s.query(Snapshot).filter(Snapshot.local_uuid.in_(list(local_uuids))).update(
+			{'deleted': True}, synchronize_session=False)
+
+
 BFG_LOCK_KEY = 1
 
 @contextmanager
