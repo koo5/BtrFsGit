@@ -518,3 +518,282 @@ def test_delete_failure_does_not_abort(mock_bfg_for_pruning):
     bfg._shared_parents = MagicMock(return_value={})
     bfg.clean_local("/test/subvol", PERCENT=100, DB=True, DRY_RUN=False)
     assert len(_delete_calls(bfg._local_cmd)) == 3
+
+
+"""
+per-deletion mark_deleted, aborted receives, min-free cleaning
+"""
+
+
+def test_mark_deleted_is_per_deletion(mock_bfg_for_pruning):
+    """a crash mid-loop must not leave already-deleted snapshots unflagged: each
+    successful delete is flagged immediately, failed deletes are not flagged."""
+    bfg = mock_bfg_for_pruning
+    now = datetime.now()
+    snaps = [
+        {"path": Path(f"/snap/s{i}"), "dt": now - timedelta(days=10 - i),
+         "parent_uuid": "test-uuid", "local_uuid": f"u{i}"}
+        for i in range(4)
+    ]
+    bfg.all_subvols_from_db = MagicMock(return_value=[])
+    bfg.most_recent_common_snapshots = MagicMock(return_value=[])
+    bfg.get_local_bfg_snapshots = MagicMock(return_value=btrfsgit.Res(snaps))
+    bfg.put_snapshots_into_buckets = MagicMock(return_value={"bucket": list(snaps)})
+    # s0 deletes fine, s1 fails, s2 deletes fine (s3 is newest - kept)
+    bfg._local_cmd = MagicMock(side_effect=["", -1, ""])
+
+    bfg.prune_local("/test/subvol", DB=True, DRY_RUN=False)
+
+    assert bfg.marked_deleted == ["u0", "u2"]
+
+
+def test_prune_remote_marks_deleted(mock_bfg_for_pruning):
+    """prune_remote flags its remote deletions in the db like every other delete path."""
+    bfg = mock_bfg_for_pruning
+    now = datetime.now()
+    r1 = {"path": Path("/remote/r1"), "dt": now - timedelta(days=40),
+          "received_uuid": "s1", "local_uuid": "r1", "fs_uuid": "remote-fs"}
+    r2 = {"path": Path("/remote/r2"), "dt": now - timedelta(days=35),
+          "received_uuid": "s2", "local_uuid": "r2", "fs_uuid": "remote-fs"}
+    bfg.all_subvols_from_db = MagicMock(return_value=[r1, r2])
+    bfg.most_recent_common_snapshots = MagicMock(return_value=[])
+    bfg.remote_fs_uuid = MagicMock(return_value=("remote-fs", Path("/remote/fs")))
+    bfg.remote_bfg_snapshots = MagicMock(return_value=[r1, r2])
+    bfg.put_snapshots_into_buckets = MagicMock(return_value={"b": [r1, r2]})
+
+    bfg.prune_remote(LOCAL_SUBVOL="/l", REMOTE_SUBVOL="/r", DRY_RUN=False)
+
+    assert _delete_calls(bfg._remote_cmd) == [str(r1["path"])]
+    assert bfg.marked_deleted == ["r1"]
+
+    # ...and a failing remote delete neither aborts nor flags
+    bfg._remote_cmd = MagicMock(return_value=-1)
+    bfg.marked_deleted.clear()
+    bfg.prune_remote(LOCAL_SUBVOL="/l", REMOTE_SUBVOL="/r", DRY_RUN=False)
+    assert bfg.marked_deleted == []
+
+
+def test_unparseable_name_is_skipped_not_fatal(mock_bfg_for_pruning):
+    """a manually renamed / foreign subvol under .bfg_snapshots must not kill the
+    series commands - it is skipped with a warning."""
+    bfg = mock_bfg_for_pruning
+    now = datetime.now()
+    good = [_member(f'/bac/.bfg_snapshots/dev3_2026-06-{d:02d}_00-00-00_t', f'd{d}', f'od{d}',
+                    now - timedelta(days=10 - d)) for d in range(1, 4)]
+    # ro subvol with a name that does not parse: no 'dt' key, exactly as the real
+    # _get_subvolumes leaves it after its warn-and-skip guard
+    junk = {'path': Path('/bac/.bfg_snapshots/manual-backup-KEEP'), 'local_uuid': 'j1',
+            'received_uuid': None, 'parent_uuid': None, 'ro': True, 'subvol_id': 0}
+    bfg._get_subvolumes = MagicMock(return_value=good + [junk])
+    bfg.local_fs_uuid = MagicMock(return_value='bacfs')
+    bfg.all_subvols_from_db = MagicMock(return_value=[])
+
+    bfg.clean_snapshots('/bac/.bfg_snapshots', PERCENT=100, DB=True, DRY_RUN=False)
+
+    deleted = _delete_calls(bfg._local_cmd)
+    # the two oldest of the good series go; the junk subvol is untouched
+    assert deleted == [str(good[0]['path']), str(good[1]['path'])], deleted
+    assert str(junk['path']) not in deleted
+
+
+def _partial(dirname, name, uuid='pu1'):
+    return {'path': Path(dirname) / name, 'local_uuid': uuid, 'received_uuid': None,
+            'parent_uuid': None, 'ro': False, 'subvol_id': 0}
+
+
+def _abort_cmd_router(lock_exists, lock_held, deletes, rms, lockdir_listing=None):
+    """route the sweep's _local_cmd calls by command shape"""
+    def route(cmd, die_on_error=True, logger=None, capture_stderr=False):
+        cmd = [str(x) for x in cmd]
+        if cmd[0] == 'test':
+            return "" if lock_exists else -1
+        if cmd[0] == 'flock' and cmd[-1] == 'true':
+            return -1 if lock_held else ""
+        if cmd[0] == 'flock' and cmd[3:6] == ['btrfs', 'subvolume', 'delete']:
+            deletes.append(cmd[6])
+            return ""
+        if cmd[0] == 'ls':
+            return lockdir_listing if lockdir_listing is not None else -1
+        if cmd[0] == 'rm':
+            rms.append(cmd[1])
+            return ""
+        return ""
+    return route
+
+
+def test_aborted_receive_swept_when_provably_dead(mock_bfg_for_pruning):
+    bfg = mock_bfg_for_pruning
+    d = '/bac/.bfg_snapshots/dev3'
+    partial = _partial(d, 'dev3_2026-06-22_08-15-49_from_jj')
+    bfg._get_subvolumes = MagicMock(return_value=[partial])
+    deletes, rms = [], []
+    bfg._local_cmd = MagicMock(side_effect=_abort_cmd_router(True, False, deletes, rms))
+
+    bfg._sweep_aborted_receives(d, d, DRY_RUN=False)
+
+    assert deletes == [str(partial['path'])]
+    assert bfg.marked_deleted == ['pu1']
+
+
+def test_aborted_receive_spared_when_in_flight(mock_bfg_for_pruning):
+    bfg = mock_bfg_for_pruning
+    d = '/bac/.bfg_snapshots/dev3'
+    partial = _partial(d, 'dev3_2026-06-22_08-15-49_from_jj')
+    bfg._get_subvolumes = MagicMock(return_value=[partial])
+    deletes, rms = [], []
+    bfg._local_cmd = MagicMock(side_effect=_abort_cmd_router(True, True, deletes, rms))
+
+    bfg._sweep_aborted_receives(d, d, DRY_RUN=False)
+
+    assert deletes == []
+    assert bfg.marked_deleted == []
+
+
+def test_aborted_receive_unproven_is_reported_not_deleted(mock_bfg_for_pruning):
+    """no lock file (receive predates locking, or raw btrfs receive): never delete."""
+    bfg = mock_bfg_for_pruning
+    d = '/bac/.bfg_snapshots/dev3'
+    partial = _partial(d, 'dev3_2026-06-22_08-15-49_from_jj')
+    bfg._get_subvolumes = MagicMock(return_value=[partial])
+    deletes, rms = [], []
+    bfg._local_cmd = MagicMock(side_effect=_abort_cmd_router(False, False, deletes, rms))
+
+    bfg._sweep_aborted_receives(d, d, DRY_RUN=False)
+
+    assert deletes == []
+    assert bfg.marked_deleted == []
+
+
+def test_aborted_receive_dry_run_deletes_nothing(mock_bfg_for_pruning):
+    bfg = mock_bfg_for_pruning
+    d = '/bac/.bfg_snapshots/dev3'
+    partial = _partial(d, 'dev3_2026-06-22_08-15-49_from_jj')
+    bfg._get_subvolumes = MagicMock(return_value=[partial])
+    deletes, rms = [], []
+    bfg._local_cmd = MagicMock(side_effect=_abort_cmd_router(True, False, deletes, rms))
+
+    bfg._sweep_aborted_receives(d, d, DRY_RUN=True)
+
+    assert deletes == []
+    assert rms == []  # GC also skipped in dry-run
+
+
+def test_receive_lock_gc(mock_bfg_for_pruning):
+    """lock files for succeeded (ro) or gone snapshots are GCd; a live partial's is kept."""
+    bfg = mock_bfg_for_pruning
+    d = Path('/bac/.bfg_snapshots/dev3')
+    now = datetime.now()
+    done = _member(str(d / 'dev3_2026-06-20_00-00-00_t'), 'r1', 'o1', now)
+    partial = _partial(str(d), 'dev3_2026-06-22_08-15-49_from_jj')
+    listing = '\n'.join([
+        done['path'].name,      # ro sibling exists -> GC
+        partial['path'].name,   # live rw partial -> KEEP
+        'dev3_2026-01-01_00-00-00_gone',  # no subvol at all -> GC
+    ])
+    bfg._get_subvolumes = MagicMock(return_value=[done, partial])
+    deletes, rms = [], []
+    # lock exists but held: the partial is in-flight, so only the GC part acts
+    bfg._local_cmd = MagicMock(side_effect=_abort_cmd_router(True, True, deletes, rms,
+                                                             lockdir_listing=listing))
+
+    bfg._sweep_aborted_receives(str(d), str(d), DRY_RUN=False)
+
+    assert deletes == []
+    lockdir = str(d / '.bfg_receive_locks')
+    assert rms == [f"{lockdir}/{done['path'].name}",
+                   f"{lockdir}/dev3_2026-01-01_00-00-00_gone"], rms
+
+
+def test_receive_cmd_str(mock_bfg_for_pruning):
+    bfg = mock_bfg_for_pruning
+    assert bfg._receive_cmd_str('/bac/.bfg_snapshots/dev3', 'dev3_2026-06-22_08-15-49_from_jj') == \
+        'flock /bac/.bfg_snapshots/dev3/.bfg_receive_locks/dev3_2026-06-22_08-15-49_from_jj ' \
+        'btrfs receive /bac/.bfg_snapshots/dev3'
+
+
+def test_parse_size():
+    assert btrfsgit.parse_size(12345) == 12345
+    assert btrfsgit.parse_size('500G') == 500 * 1024**3
+    assert btrfsgit.parse_size('1.5T') == int(1.5 * 1024**4)
+    assert btrfsgit.parse_size('100MiB') == 100 * 1024**2
+    assert btrfsgit.parse_size('2TB') == 2 * 1024**4
+    assert btrfsgit.parse_size('777') == 777
+    with pytest.raises(ValueError):
+        btrfsgit.parse_size('lots')
+
+
+def test_clean_fs_min_free_stops_at_target(mock_bfg_for_pruning):
+    """min-free mode deletes oldest-first across all series, skips protected and
+    series-newest, syncs after each delete, and stops once the goal is met."""
+    bfg = mock_bfg_for_pruning
+    now = datetime.now()
+    a1 = _member('/bac/.bfg_snapshots/a/a_1', 'a1', 'oa1', now - timedelta(days=30))
+    a2 = _member('/bac/.bfg_snapshots/a/a_2', 'a2', 'oa2', now - timedelta(days=20))
+    a3 = _member('/bac/.bfg_snapshots/a/a_3', 'a3', 'oa3', now - timedelta(days=1))
+    b1 = _member('/bac/.bfg_snapshots/b/b_1', 'b1', 'ob1', now - timedelta(days=25))
+    b2 = _member('/bac/.bfg_snapshots/b/b_2', 'b2', 'ob2', now - timedelta(days=15))
+    b3 = _member('/bac/.bfg_snapshots/b/b_3', 'b3', 'ob3', now - timedelta(days=2))
+    series = [
+        (('/bac/.bfg_snapshots/a', 'a'), [a1, a2, a3], {a2['path']: ['jj:/d2']}),
+        (('/bac/.bfg_snapshots/b', 'b'), [b1, b2, b3], {}),
+    ]
+    bfg._snapshot_series = MagicMock(return_value=iter(series))
+    # initial 10; blanket settle re-measure 10 (still below);
+    # a1 top-check 10 -> delete, post-sync 40 -> settle-sleep;
+    # b1 top-check 40 -> delete, post-sync 120 -> goal met, stop (no sleep); final 120
+    bfg._free_bytes = MagicMock(side_effect=[10, 10, 10, 40, 40, 120, 120])
+
+    with patch('btrfsgit.btrfsgit.time.sleep') as mock_sleep:
+        bfg.clean_fs('/bac', DB=True, DRY_RUN=False, MIN_FREE=100)
+
+    deleted = _delete_calls(bfg._local_cmd)
+    # oldest-first across series: a1 (30d), b1 (25d); a2 protected, b2 not reached,
+    # a3/b3 newest-of-series never candidates
+    assert deleted == [str(a1['path']), str(b1['path'])], deleted
+    assert bfg.marked_deleted == ['a1', 'b1']
+    syncs = [c.args[0] for c in bfg._local_cmd.call_args_list
+             if [str(x) for x in c.args[0][:3]] == ['btrfs', 'subvolume', 'sync']]
+    assert len(syncs) == 3  # blanket settle + one per delete
+    # the settle-sleep safety net runs only when we intend to delete (more): the
+    # blanket one, one after a1 (still below target), none after b1 (goal met)
+    assert mock_sleep.call_args_list == [((60,),), ((60,),)]
+
+
+def test_clean_fs_min_free_blanket_settle_can_satisfy_goal(mock_bfg_for_pruning):
+    """pending deletions from the preceding prune may reach the goal on their own -
+    then nothing at all is deleted."""
+    bfg = mock_bfg_for_pruning
+    bfg._snapshot_series = MagicMock(return_value=iter([]))
+    # initial read under-reads (cleaner still working); after settling the goal is met
+    bfg._free_bytes = MagicMock(side_effect=[10, 150])
+
+    with patch('btrfsgit.btrfsgit.time.sleep') as mock_sleep:
+        bfg.clean_fs('/bac', DB=True, DRY_RUN=False, MIN_FREE=100)
+
+    assert _delete_calls(bfg._local_cmd) == []
+    bfg._snapshot_series.assert_not_called()
+    assert mock_sleep.call_args_list == [((60,),)]
+
+
+def test_clean_fs_min_free_noop_when_enough_free(mock_bfg_for_pruning):
+    bfg = mock_bfg_for_pruning
+    bfg._snapshot_series = MagicMock(return_value=iter([]))
+    bfg._free_bytes = MagicMock(return_value=200)
+
+    bfg.clean_fs('/bac', DB=True, DRY_RUN=False, MIN_FREE=100)
+
+    assert _delete_calls(bfg._local_cmd) == []
+    bfg._snapshot_series.assert_not_called()
+
+
+def test_clean_fs_min_free_dry_run_deletes_nothing(mock_bfg_for_pruning):
+    bfg = mock_bfg_for_pruning
+    now = datetime.now()
+    a1 = _member('/bac/.bfg_snapshots/a/a_1', 'a1', 'oa1', now - timedelta(days=30))
+    a2 = _member('/bac/.bfg_snapshots/a/a_2', 'a2', 'oa2', now - timedelta(days=1))
+    bfg._snapshot_series = MagicMock(return_value=iter([(('/bac/.bfg_snapshots/a', 'a'), [a1, a2], {})]))
+    bfg._free_bytes = MagicMock(return_value=10)
+
+    bfg.clean_fs('/bac', DB=True, DRY_RUN=True, MIN_FREE=100)
+
+    assert _delete_calls(bfg._local_cmd) == []

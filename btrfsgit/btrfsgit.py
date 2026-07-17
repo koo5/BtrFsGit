@@ -91,6 +91,17 @@ def try_unlink(f):
 		pass
 
 
+def parse_size(size):
+	"""'500G', '1.5T', '100MiB', '2TB' or plain bytes -> int bytes (binary units)"""
+	if isinstance(size, (int, float)):
+		return int(size)
+	m = re.match(r'^([\d.]+)\s*([KMGTP]?)(I?B)?$', str(size).strip(), re.IGNORECASE)
+	if m is None:
+		raise ValueError(f'cannot parse size: {size!r}')
+	unit = m.group(2).upper() if m.group(2) else ''
+	return int(float(m.group(1)) * 1024 ** (' KMGTP'.index(unit) if unit else 0))
+
+
 def _prerr(*args, sep=' ', **kwargs):
 	message = sep.join(str(arg) for arg in args)
 	logging.info(message, **kwargs)
@@ -324,7 +335,13 @@ class Bfg:
 			i['host'] = host
 			i['fs_uuid'] = fs_uuid
 			if '.bfg_snapshots' in i['path'].parts:
-				i['dt'] = s.snapshot_dt(i)
+				# an unparseable name is not a bfg snapshot (manual rename, foreign tool);
+				# it must not kill every operation on the filesystem - warn and move on,
+				# leaving the record without 'dt' (snapshot-handling code skips those)
+				try:
+					i['dt'] = s.snapshot_dt(i)
+				except ValueError:
+					logbfg.warning(f"ignoring subvol with unparseable snapshot name: {i['path']}")
 
 		subvols.sort(key=lambda sv: -sv['subvol_id'])
 		logbfg.debug(f'_get_subvolumes: {len(subvols)=}')
@@ -459,7 +476,11 @@ class Bfg:
 			for x in r:
 				x['path'] = Path(x['path'])
 				if '.bfg_snapshots' in x['path'].parts:
-					x['dt'] = s.snapshot_dt(x)
+					# see _get_subvolumes: unparseable names are warned about, not fatal
+					try:
+						x['dt'] = s.snapshot_dt(x)
+					except ValueError:
+						logbfg.warning(f"ignoring db row with unparseable snapshot name: {x['path']}")
 				x['src'] = 'db'
 
 			logbfg.debug(f'got {len(r)} snapshots from db.')
@@ -710,9 +731,11 @@ class Bfg:
 		for snapshot in local_snapshots:
 			logger.debug(f'{snapshot=}')
 			if '.bfg_snapshots' in snapshot['path'].parts:
+				if 'dt' not in snapshot:
+					# name did not parse in _get_subvolumes (already warned): not a bfg snapshot
+					continue
 				logger.debug(f'YES')
 				result.append(snapshot)
-				snapshot['dt'] = s.snapshot_dt(snapshot)
 		logbfg.debug(f'get_local_bfg_snapshots_for_subvol: {len(result)=}')
 		return Res(result)
 
@@ -885,7 +908,6 @@ class Bfg:
 	def _delete_prunable(s, decisions, DRY_RUN, runner):
 		"""log each retention decision and delete the prunable snapshots (shared by
 		_prune_local, _prune_remote and the series commands - they differ only in the runner)"""
-		deleted_uuids = []
 		for d in decisions:
 			path = d['snap']['path']
 			logbfg.info(f"  {path} - {d['reason']}")
@@ -898,10 +920,11 @@ class Bfg:
 					# e.g. already deleted by a concurrently running backup's prune
 					logbfg.warning(f"could not delete {path} (deleted concurrently?), continuing")
 					continue
-				deleted_uuids.append(d['snap'].get('local_uuid'))
+				# flag each deletion immediately: a crash mid-loop must not leave the
+				# already-deleted snapshots as unflagged phantom rows in the db
+				s._mark_deleted_in_db([d['snap'].get('local_uuid')])
 				_prerr(f"Deleted snapshot: {path}")
 
-		s._mark_deleted_in_db(deleted_uuids)
 		_prerr("Done pruning.")
 
 
@@ -1036,7 +1059,6 @@ class Bfg:
 		logbfg.info(f"{n} snapshot(s) total, considering the oldest {count_to_clean} for cleaning")
 
 		deleted = 0
-		deleted_uuids = []
 		for i, snap in enumerate(snapshots):
 			if i >= count_to_clean:
 				break
@@ -1064,10 +1086,11 @@ class Bfg:
 					logbfg.warning(f"could not delete {path} (deleted concurrently?), continuing")
 					continue
 				deleted += 1
-				deleted_uuids.append(snap.get('local_uuid'))
+				# flag each deletion immediately: a crash mid-loop must not leave the
+				# already-deleted snapshots as unflagged phantom rows in the db
+				s._mark_deleted_in_db([snap.get('local_uuid')])
 				_prerr(f"Deleted snapshot: {path}")
 
-		s._mark_deleted_in_db(deleted_uuids)
 		_prerr(f"Done cleaning. Deleted {deleted} snapshot(s).")
 
 
@@ -1245,10 +1268,12 @@ class Bfg:
 		"""
 		Apply prune_local's time-bucketed retention policy to each snapshot series found
 		directly inside PARENT_DIR, e.g. /bac20/backups/jj/.bfg_snapshots/dev3.
+		Also sweeps provably-dead aborted receives in PARENT_DIR.
 		"""
 		with db.advisory_lock():
 			for key, members, protected in s._snapshot_series(PARENT_DIR, PARENT_DIR, DB):
 				s._delete_prunable(s._prune_decisions(members, set(protected), members[-1]['path']), DRY_RUN, s._local_cmd)
+			s._sweep_aborted_receives(PARENT_DIR, PARENT_DIR, DRY_RUN)
 
 
 	def clean_snapshots(s, PARENT_DIR, PERCENT=30, DB=True, DRY_RUN=False):
@@ -1264,32 +1289,129 @@ class Bfg:
 	def report_snapshots(s, PARENT_DIR, PERCENT=30, DB=True, ALL=False):
 		"""
 		Read-only: the report_local table for each snapshot series found directly inside
-		PARENT_DIR. Nothing is deleted.
+		PARENT_DIR, plus any aborted receives. Nothing is deleted.
 		"""
 		for key, members, protected in s._snapshot_series(PARENT_DIR, PARENT_DIR, DB):
 			s._report_snapshots(s._series_heading(key, DB), members, protected, PERCENT, ALL)
+		s._report_aborted_receives(PARENT_DIR, PARENT_DIR)
 
 
 	def prune_fs(s, FS, DB=True, DRY_RUN=False):
-		"""prune_snapshots for every snapshot series on the whole filesystem FS."""
+		"""prune_snapshots for every snapshot series on the whole filesystem FS.
+		Also sweeps provably-dead aborted receives fs-wide."""
 		with db.advisory_lock():
 			for key, members, protected in s._snapshot_series(FS, None, DB):
 				logbfg.info(f"Pruning series {key[0]}/{key[1]}*")
 				s._delete_prunable(s._prune_decisions(members, set(protected), members[-1]['path']), DRY_RUN, s._local_cmd)
+			s._sweep_aborted_receives(FS, None, DRY_RUN)
 
 
-	def clean_fs(s, FS, PERCENT=30, DB=True, DRY_RUN=False):
-		"""clean_snapshots for every snapshot series on the whole filesystem FS."""
+	def clean_fs(s, FS, PERCENT=30, DB=True, DRY_RUN=False, MIN_FREE=None):
+		"""
+		clean_snapshots for every snapshot series on the whole filesystem FS.
+
+		With MIN_FREE (bytes, or '500G'/'1.5T'), the oldest-PERCENT%-per-series policy
+		is replaced by a goal: delete unprotected snapshots fs-wide, oldest first,
+		only until the filesystem reports at least MIN_FREE free. Idempotent by goal -
+		safe to re-run (and to cron) without compounding history loss.
+		"""
 		with db.advisory_lock():
+			if MIN_FREE is not None:
+				s._clean_fs_min_free(FS, MIN_FREE, DB, DRY_RUN)
+				return
 			for key, members, protected in s._snapshot_series(FS, None, DB):
 				logbfg.info(f"Cleaning series {key[0]}/{key[1]}*")
 				s._clean_snapshots(members, protected, PERCENT, DRY_RUN)
 
 
+	def _free_bytes(s, path):
+		st = os.statvfs(path)
+		return st.f_bavail * st.f_frsize
+
+
+	def _clean_fs_min_free(s, FS, MIN_FREE, DB, DRY_RUN):
+		target = parse_size(MIN_FREE)
+		free = s._free_bytes(FS)
+		logbfg.info(f'{FS}: {free / 2**30:.1f} GiB free, target {target / 2**30:.1f} GiB')
+		if free >= target:
+			_prerr(f'Nothing to clean: {FS} already has {free / 2**30:.1f} GiB free.')
+			return
+
+		if not DRY_RUN:
+			# blanket settle before deciding to delete anything: deletions queued
+			# earlier (the prune that just ran, a previous clean, ...) may still be
+			# reclaiming space in the background, so the reading above under-reads
+			logbfg.info('below target; waiting for pending deletions to settle...')
+			s._local_cmd(['btrfs', 'subvolume', 'sync', str(FS)], die_on_error=False)
+			time.sleep(60)
+			free = s._free_bytes(FS)
+			logbfg.info(f'{FS}: {free / 2**30:.1f} GiB free after settling')
+			if free >= target:
+				_prerr(f'Nothing to clean: {FS} reached {free / 2**30:.1f} GiB free '
+					   f'once pending deletions settled.')
+				return
+
+		# pool every deletable member fs-wide (not protected, not the newest of its
+		# series), oldest first - so all series contribute their oldest history first
+		candidates = []
+		for key, members, protected in s._snapshot_series(FS, None, DB):
+			newest = members[-1]['path']
+			for m in members:
+				if m['path'] == newest or m['path'] in protected:
+					continue
+				candidates.append(m)
+		candidates.sort(key=lambda x: x['dt'])
+
+		if DRY_RUN:
+			logbfg.info(f'DRY_RUN: would delete up to {len(candidates)} snapshot(s), oldest first, '
+						f'until {target / 2**30:.1f} GiB is free (freed sizes unknowable in advance):')
+			for m in candidates:
+				logbfg.info(f'  {m["path"]}')
+			return
+
+		deleted = 0
+		for m in candidates:
+			free = s._free_bytes(FS)
+			if free >= target:
+				break
+			path = m['path']
+			cmd = ['btrfs', 'subvolume', 'delete', str(path)]
+			if not s._yes(shlex.join(cmd)):
+				continue
+			if s._local_cmd(cmd, die_on_error=False) == -1:
+				logbfg.warning(f"could not delete {path} (deleted concurrently?), continuing")
+				continue
+			s._mark_deleted_in_db([m.get('local_uuid')])
+			deleted += 1
+			_prerr(f"Deleted snapshot: {path}")
+			# subvol deletion frees space asynchronously (btrfs cleaner thread); wait
+			# for it so the next free-space check reflects this deletion
+			s._local_cmd(['btrfs', 'subvolume', 'sync', str(FS)], die_on_error=False)
+			if s._free_bytes(FS) >= target:
+				break
+			# safety net: even after subvolume sync, free-space accounting may lag a
+			# little (e.g. extents pinned until the next transaction commit). An
+			# under-read here would delete more history than the goal needs, so give
+			# the accounting a minute to settle before deciding to delete more.
+			logbfg.info('below target after sync; waiting 60s for freed space to settle '
+						'before deleting more...')
+			time.sleep(60)
+
+		free = s._free_bytes(FS)
+		if free >= target:
+			_prerr(f'Done: deleted {deleted} snapshot(s), {free / 2**30:.1f} GiB free.')
+		else:
+			logbfg.warning(f'Deleted all {deleted} deletable snapshot(s) but only reached '
+						   f'{free / 2**30:.1f} GiB free of the {target / 2**30:.1f} GiB target - '
+						   f'the rest is protected shared pairs, series-newest snapshots, or non-snapshot data.')
+
+
 	def report_fs(s, FS, PERCENT=30, DB=True, ALL=False):
-		"""Read-only: the report_local table for every snapshot series on the filesystem FS."""
+		"""Read-only: the report_local table for every snapshot series on the filesystem FS,
+		plus any aborted receives."""
 		for key, members, protected in s._snapshot_series(FS, None, DB):
 			s._report_snapshots(s._series_heading(key, DB), members, protected, PERCENT, ALL)
+		s._report_aborted_receives(FS, None)
 
 
 	def _series_heading(s, key, DB):
@@ -1315,7 +1437,11 @@ class Bfg:
 				continue
 			if restrict_dir is not None and x['path'].parent != restrict_dir:
 				continue
-			name = s.parse_snapshot_name(x['path'].name)['name']
+			try:
+				name = s.parse_snapshot_name(x['path'].name)['name']
+			except ValueError:
+				logbfg.warning(f'ignoring subvol with unparseable snapshot name: {x["path"]}')
+				continue
 			groups[(x['path'].parent, name)].append(x)
 
 		if not groups:
@@ -1370,6 +1496,131 @@ class Bfg:
 		return result
 
 
+	"""
+	aborted receives.
+
+	btrfs receive creates the target subvol WRITABLE and it stays so for the whole
+	transfer; ro and received_uuid are stamped together only at successful
+	end-of-stream. So "rw + no received_uuid + snapshot-shaped name under a
+	.bfg_snapshots location" is the signature of a receive that either aborted or is
+	still running. The two are told apart by the per-snapshot receive lock (see
+	_receive_cmd_str): the receiver holds it for the whole transfer and the kernel
+	drops it the instant the receiver dies, so lock-free == provably dead.
+	Partials with no lock file (from before receive locking, or made by a raw
+	btrfs receive) are only ever reported, never deleted.
+	"""
+
+	def _filter_aborted_receives(s, subvols, restrict_dir):
+		"""aborted/in-progress receives among `subvols` (see class comment above);
+		restrict_dir as in _snapshot_series."""
+		if restrict_dir is not None:
+			restrict_dir = Path(restrict_dir).absolute()
+		out = []
+		for x in subvols:
+			if x['ro'] or x['received_uuid'] is not None:
+				continue
+			if '.bfg_snapshots' not in x['path'].parts:
+				continue
+			if restrict_dir is not None and x['path'].parent != restrict_dir:
+				continue
+			try:
+				s.parse_snapshot_name(x['path'].name)
+			except ValueError:
+				continue
+			out.append(x)
+		return out
+
+
+	def _aborted_receive_status(s, x):
+		"""('dead'|'in-flight'|'unproven', lock path) for one partial"""
+		lock = s._receive_lock_path(x['path'].parent, x['path'].name)
+		if s._local_cmd(['test', '-e', str(lock)], die_on_error=False) == -1:
+			return 'unproven', lock
+		if s._local_cmd(['flock', '-n', str(lock), 'true'], die_on_error=False) == -1:
+			return 'in-flight', lock
+		return 'dead', lock
+
+
+	def _sweep_aborted_receives(s, path, restrict_dir, DRY_RUN):
+		"""
+		Delete provably-dead aborted receives (the deletion itself runs under flock -n
+		on the receive lock, so a receive restarting concurrently is never pulled out
+		from under - it just makes the delete a no-op). Then GC receive lock files
+		that can no longer have a holder.
+		"""
+		subvols = s._get_subvolumes(s._local_cmd, path, 'local')
+		for x in s._filter_aborted_receives(subvols, restrict_dir):
+			p = x['path']
+			status, lock = s._aborted_receive_status(x)
+			if status == 'unproven':
+				logbfg.warning(
+					f'ABORTED RECEIVE (unproven): {p} - rw with no received_uuid, but no receive lock '
+					f'file exists to prove the receive is dead (transfer predates receive locking?). '
+					f'If no btrfs receive is running for it, delete manually: btrfs subvolume delete {p}')
+			elif status == 'in-flight':
+				logbfg.info(f'receive in progress, skipping: {p}')
+			elif DRY_RUN:
+				logbfg.info(f'ABORTED RECEIVE: would delete {p} (DRY_RUN)')
+			else:
+				cmd = ['flock', '-n', str(lock), 'btrfs', 'subvolume', 'delete', str(p)]
+				if not s._yes(shlex.join(cmd)):
+					continue
+				if s._local_cmd(cmd, die_on_error=False) == -1:
+					logbfg.warning(f'could not delete aborted receive {p} '
+								   f'(receive restarted concurrently?), continuing')
+					continue
+				s._mark_deleted_in_db([x.get('local_uuid')])
+				_prerr(f'Deleted aborted receive: {p}')
+		if not DRY_RUN:
+			s._gc_receive_locks(subvols, restrict_dir)
+
+
+	def _gc_receive_locks(s, subvols, restrict_dir):
+		"""
+		Remove receive lock files that can no longer have a holder: the same-name
+		subvol is read-only (receive succeeded; a same-name retry would fail at
+		creation, so no receiver for that name can ever run again) or gone (received
+		and later pruned, or a swept partial). A lock file whose name matches a live
+		rw partial is load-bearing and kept.
+		"""
+		if restrict_dir is not None:
+			restrict_dir = Path(restrict_dir).absolute()
+		by_dir = defaultdict(dict)
+		for x in subvols:
+			if '.bfg_snapshots' in x['path'].parts:
+				by_dir[x['path'].parent][x['path'].name] = x
+
+		lock_dirs = set(by_dir.keys()) if restrict_dir is None else {restrict_dir}
+
+		for d in sorted(lock_dirs):
+			lockdir = s._receive_locks_dir(d)
+			listing = s._local_cmd(['ls', '-1', str(lockdir)], die_on_error=False)
+			if listing == -1:
+				continue
+			for name in listing.splitlines():
+				name = name.strip()
+				if not name:
+					continue
+				subvol = by_dir[d].get(name)
+				if subvol is not None and not subvol['ro']:
+					continue  # live partial (or in-flight receive) - its lock is the proof mechanism
+				logbfg.debug(f'GC receive lock {lockdir}/{name}')
+				s._local_cmd(['rm', str(lockdir / name)], die_on_error=False)
+
+
+	def _report_aborted_receives(s, path, restrict_dir):
+		"""read-only: print every partial in scope and what prune would do about it"""
+		subvols = s._get_subvolumes(s._local_cmd, path, 'local')
+		msgs = {
+			'dead': 'provably dead - prune will delete it',
+			'in-flight': 'receive lock held - receive in progress',
+			'unproven': 'no receive lock file - cannot prove dead; if no receive is running, delete manually',
+		}
+		for x in s._filter_aborted_receives(subvols, restrict_dir):
+			status, lock = s._aborted_receive_status(x)
+			print(f'ABORTED RECEIVE: {x["path"]}   ({msgs[status]})')
+
+
 	def prune_remote(s, LOCAL_SUBVOL, REMOTE_SUBVOL, DRY_RUN=False):
 		with db.advisory_lock():
 			s._prune_remote(LOCAL_SUBVOL, REMOTE_SUBVOL, DRY_RUN)
@@ -1411,19 +1662,9 @@ class Bfg:
 		newest = remote_snapshots[-1]['path']
 
 		# same retention decisions as prune_local (keep shared parents + newest + one per bucket,
-		# thin the rest, no freeze past the shared parent), but delete on the remote side.
-		for d in s._prune_decisions(remote_snapshots, mrcs, newest):
-			path = d['snap']['path']
-			logbfg.info(f"  {path} - {d['reason']}")
-
-			if d['prunable'] and not DRY_RUN:
-				cmd = ['btrfs', 'subvolume', 'delete', str(path)]
-				if not s._yes(shlex.join(cmd)):
-					continue
-				s._remote_cmd(cmd)
-				_prerr(f"Deleted snapshot: {path}")
-
-		_prerr("Done pruning.")
+		# thin the rest, no freeze past the shared parent), but delete on the remote side -
+		# with the same delete-failure tolerance and immediate mark_deleted flagging.
+		s._delete_prunable(s._prune_decisions(remote_snapshots, mrcs, newest), DRY_RUN, s._remote_cmd)
 
 
 
@@ -1537,13 +1778,34 @@ class Bfg:
 
 
 
+	def _receive_locks_dir(s, target_dir):
+		"""per-target-dir directory of receive lock files, one per incoming snapshot"""
+		return Path(target_dir) / '.bfg_receive_locks'
+
+
+	def _receive_lock_path(s, target_dir, snapshot_name):
+		return s._receive_locks_dir(target_dir) / snapshot_name
+
+
+	def _receive_cmd_str(s, target_dir, snapshot_name):
+		"""
+		The receive side of a send pipeline: btrfs receive wrapped in flock(1) on a
+		per-snapshot lock file, held for the whole transfer. The kernel drops the lock
+		the instant the receiving process dies (ssh cut, ENOSPC, OOM, ctrl-C), so
+		"is this partial's receive still alive?" becomes a kernel fact that
+		_sweep_aborted_receives can test exactly, with no process/age heuristics.
+		"""
+		lock = s._receive_lock_path(target_dir, snapshot_name)
+		return 'flock ' + str(lock) + ' btrfs receive ' + str(target_dir)
+
+
 	def push(s, SUBVOL, SNAPSHOT, REMOTE_SUBVOL, PARENT=None, CLONESRCS=[]):
 		"""
 		Try to figure out shared parents, if not provided, and send SNAPSHOT to the other side.
 		"""
 		snapshot_parent_dir = s.calculate_default_snapshot_parent_dir('remote', Path(REMOTE_SUBVOL)).val
 		logbfg.debug(f'mkdir -p {snapshot_parent_dir}')
-		s._remote_cmd(['mkdir', '-p', str(snapshot_parent_dir)])
+		s._remote_cmd(['mkdir', '-p', str(s._receive_locks_dir(snapshot_parent_dir))])
 
 		if PARENT is None:
 			logbfg.debug(f'get_subvol...')
@@ -1553,7 +1815,8 @@ class Bfg:
 			if PARENT is not None:
 				PARENT = PARENT['abspath']
 
-		s.local_send(SNAPSHOT, ' | ' + s._sshstr + ' ' + s._sudo[0] + " btrfs receive " + str(snapshot_parent_dir), PARENT,
+		s.local_send(SNAPSHOT, ' | ' + s._sshstr + ' ' + s._sudo[0] + ' '
+					 + s._receive_cmd_str(snapshot_parent_dir, Path(SNAPSHOT).name), PARENT,
 					 CLONESRCS)
 		_prerr(f'DONE, \n\tpushed {SNAPSHOT} \n\tinto {snapshot_parent_dir}\n.')
 		return Res(str(snapshot_parent_dir) + '/' + Path(SNAPSHOT).parts[-1])
@@ -1594,7 +1857,7 @@ class Bfg:
 		REMOTE_PARENT_DIR = Path(REMOTE_PARENT_DIR)
 
 		logbfg.debug(f'mkdir -p {REMOTE_PARENT_DIR}')
-		s._remote_cmd(['mkdir', '-p', str(REMOTE_PARENT_DIR)])
+		s._remote_cmd(['mkdir', '-p', str(s._receive_locks_dir(REMOTE_PARENT_DIR))])
 
 		if PARENT is None:
 			my_uuid = s.get_subvol(s._local_cmd, SNAPSHOT).val['local_uuid']
@@ -1602,7 +1865,8 @@ class Bfg:
 			if PARENT is not None:
 				PARENT = PARENT['abspath']
 
-		s.local_send(str(SNAPSHOT), ' | ' + s._sshstr + ' ' + s._sudo[0] + " btrfs receive " + str(REMOTE_PARENT_DIR), PARENT,
+		s.local_send(str(SNAPSHOT), ' | ' + s._sshstr + ' ' + s._sudo[0] + ' '
+					 + s._receive_cmd_str(REMOTE_PARENT_DIR, SNAPSHOT.name), PARENT,
 					 CLONESRCS)
 
 		remote_snapshot = str(REMOTE_PARENT_DIR / SNAPSHOT.name)
@@ -1663,8 +1927,12 @@ class Bfg:
 	def remote_send(s, REMOTE_SNAPSHOT, LOCAL_DIR, PARENT, CLONESRCS):
 		parents_args = s._parent_args(PARENT, CLONESRCS)
 
+		# receive under a per-snapshot flock, see _receive_cmd_str
+		s._local_cmd(['mkdir', '-p', str(s._receive_locks_dir(LOCAL_DIR))])
+		lock = s._receive_lock_path(LOCAL_DIR, Path(REMOTE_SNAPSHOT).name)
+
 		cmd1 = shlex.split(s._sshstr) + s._sudo + ['btrfs', 'send'] + parents_args + [REMOTE_SNAPSHOT]
-		cmd2 = s._sudo + ['btrfs', 'receive', LOCAL_DIR]
+		cmd2 = s._sudo + ['flock', str(lock), 'btrfs', 'receive', str(LOCAL_DIR)]
 		logbtrfs.info(shlex.join(cmd1) + ' >>|>> ' + shlex.join(cmd2))
 		p1 = subprocess.Popen(
 			cmd1,
@@ -1675,7 +1943,7 @@ class Bfg:
 		p1.stdout.close()  # https://www.titanwolf.org/Network/q/91c3c5dd-aa49-4bf4-911d-1bfe5ac304da/y
 		p2.communicate()
 		if p2.returncode != 0:
-			loggfg.error('exit code ' + str(p2.returncode))
+			logbfg.error('exit code ' + str(p2.returncode))
 			exit(1)
 
 
