@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 """Tests for BtrFsGit database interactions."""
 
+import contextlib
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -120,9 +121,15 @@ def test_update_db(mock_bfg_with_db, mock_db):
     mock_bfg_with_db.get_all_subvols_on_filesystem = MagicMock(
         return_value=btrfsgit.Res(mock_snapshots)
     )
-    
-    # Call update_db
-    mock_bfg_with_db.update_db("/mnt/test_fs")
+
+    # Call update_db, with the advisory lock nulled: pg_advisory_lock is
+    # postgres-only and the test db is sqlite
+    orig_advisory_lock = db.advisory_lock
+    db.advisory_lock = lambda: contextlib.nullcontext()
+    try:
+        mock_bfg_with_db.update_db("/mnt/test_fs")
+    finally:
+        db.advisory_lock = orig_advisory_lock
     
     # Verify database state
     with db.session() as session:
@@ -225,42 +232,45 @@ def test_best_shared_parent(mock_session, mock_bfg_with_db):
 
 
 def test_most_recent_common_snapshots(mock_bfg_with_db):
-    """Test the most_recent_common_snapshots method."""
-    # Mock required methods
+    """most_recent_common_snapshots(_by_fs): one result per remote fs, carrying the
+    first parent candidate; empty when there are no candidates."""
     mock_bfg_with_db.get_subvol = MagicMock(
         return_value=btrfsgit.Res({'local_uuid': 'test-uuid'})
     )
-    
+
     mock_bfg_with_db.remote_fs_uuids = MagicMock(
         return_value={'remote-fs-uuid': {'hosts': {'remote-host'}}}
     )
-    
-    mock_bfg_with_db.best_shared_parent = MagicMock(
-        return_value=btrfsgit.Res({
-            'local_uuid': 'uuid1',
-            'path': '/mnt/test_fs/.bfg_snapshots/data_2023-05-10_10-00-00_tag'
-        })
-    )
-    
-    # Call the method
+
+    # the walk itself is covered by test_common_parents.py; here we mock its seam
+    candidate = {
+        'local_uuid': 'uuid1',
+        'path': Path('/mnt/test_fs/.bfg_snapshots/data_2023-05-10_10-00-00_tag'),
+    }
+    mock_bfg_with_db._parent_candidates2 = MagicMock(return_value=[candidate])
+
     result = mock_bfg_with_db.most_recent_common_snapshots(
         mock_bfg_with_db.all_subvols_from_db(),
         '/mnt/test_fs/data'
     )
-    
-    # Verify result
+
     assert len(result) == 1
     assert result[0]['local_uuid'] == 'uuid1'
     assert result[0]['path'] == Path('/mnt/test_fs/.bfg_snapshots/data_2023-05-10_10-00-00_tag')
-    
-    # Test with no result from best_shared_parent
-    mock_bfg_with_db.best_shared_parent = MagicMock(
-        return_value=btrfsgit.Res(None)
-    )
-    
+
+    # the machine-labeled input handed to the walker must cover all db rows
+    (all2, subvol, my_uuid, direction), _ = (
+        mock_bfg_with_db._parent_candidates2.call_args.args, {})
+    assert my_uuid == 'test-uuid'
+    assert direction == ('local', 'remote')
+    assert set(x['machine'] for x in all2) <= {'local', 'remote', 'other'}
+
+    # Test with no candidates
+    mock_bfg_with_db._parent_candidates2 = MagicMock(return_value=[])
+
     result = mock_bfg_with_db.most_recent_common_snapshots(
         mock_bfg_with_db.all_subvols_from_db(),
         '/mnt/test_fs/data'
     )
-    
+
     assert len(result) == 0  # Should return empty list

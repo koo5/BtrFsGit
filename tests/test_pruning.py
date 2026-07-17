@@ -405,6 +405,25 @@ def test_shared_snapshots_protects_newest_shared_per_fs(mock_bfg_for_pruning):
     }
 
 
+def test_shared_snapshots_ignores_deleted_rows(mock_bfg_for_pruning):
+    """A row flagged deleted (mark_deleted between update_db runs) must not count as a
+    copy: otherwise it shifts "newest shared" past the newest real pair, unprotecting it."""
+    bfg = mock_bfg_for_pruning
+    now = datetime.now()
+    m1 = _member('/bac/.bfg_snapshots/dev3/dev3_a', 'r1', 'o1', now - timedelta(days=2))
+    m2 = _member('/bac/.bfg_snapshots/dev3/dev3_b', 'r2', 'o2', now - timedelta(days=1))
+    rows = [
+        {'fs_uuid': 'd2fs', 'host': 'jj', 'fs': '/d2', 'local_uuid': 'o1', 'received_uuid': None,
+         'deleted': False},
+        # the origin of the newer member was just deleted on jj - a phantom row
+        {'fs_uuid': 'd2fs', 'host': 'jj', 'fs': '/d2', 'local_uuid': 'o2', 'received_uuid': None,
+         'deleted': True},
+    ]
+    shared = bfg._shared_snapshots(rows, 'bacfs', [m1, m2])
+    # protection must stay on m1 (the newest REAL pair), not shift to m2
+    assert shared == {m1['path']: ['jj:/d2']}
+
+
 def _flat_listing(now):
     """two series (dev3, home) flat in one .bfg_snapshots dir, plus ignorable entries"""
     dev3 = [_member(f'/bac/.bfg_snapshots/dev3_2026-06-{d:02d}_00-00-00_t', f'd{d}', f'od{d}',

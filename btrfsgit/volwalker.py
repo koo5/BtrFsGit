@@ -40,13 +40,19 @@ class VolWalker:
 			logging.debug(f'i: {i}.')
 
 			for remote_snapshot in s.ro_descendants_chain(i, s.target):
+				if remote_snapshot.get('deleted'):
+					# a deleted copy on the target is no proof the content is still there
+					continue
 				remote_snapshot_local_uuid = remote_snapshot['local_uuid']
 				logging.debug(f'{remote_snapshot_local_uuid} is on remote.')
 				for x in s.ro_descendants_chain(i, s.source):
+					if x.get('deleted'):
+						# deleted snapshots stay walkable for linkage but are not candidates
+						continue
 					x_local_uuid = x['local_uuid']
 					logging.debug(f'local counterpart: {x_local_uuid}.')
 					yield x
-				# we only care that a 'remote' snapshot exists, not how many there are:
+				# we only care that a live 'remote' snapshot exists, not how many there are:
 				break
 
 		p = s.parent(my_uuid)

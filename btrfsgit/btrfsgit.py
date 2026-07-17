@@ -296,8 +296,12 @@ class Bfg:
 
 		if src == 'local':
 			fs = s.local_fs_id5_mount_point(subvolume)
+			fs_uuid = s.local_fs_uuid(subvolume)
+			host = s.host
 		else:
 			fs = s.remote_fs_id5_mount_point(subvolume)
+			fs_uuid = s.remote_fs_uuid(subvolume)[0]
+			host = s._remote_cmd('hostname').strip()
 
 		cmd = ['btrfs', 'subvolume', 'list', '-q', '-t', '-R', '-u']
 		for line in command_runner(cmd + [subvolume], logger=logbtrfs).splitlines()[2:]:
@@ -314,10 +318,11 @@ class Bfg:
 
 		for i in subvols:
 			i['ro'] = i['local_uuid'] in ro_subvols
-			# we should not need this for remote subvolumes:
-			if src == 'local':
-				i['host'] = s.host
-				i['fs_uuid'] = s.local_fs_uuid(subvolume)
+			# a live listing by definition contains no deleted subvols; the key exists so
+			# these records compose with db rows in deleted-aware code (walkers, filters)
+			i['deleted'] = False
+			i['host'] = host
+			i['fs_uuid'] = fs_uuid
 			if '.bfg_snapshots' in i['path'].parts:
 				i['dt'] = s.snapshot_dt(i)
 
@@ -549,7 +554,7 @@ class Bfg:
 		if m is None:
 			m = re.match(r'(.+)_(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})_(.*)', dname)
 		if m is None:
-			raise Exception(f'could not parse snapshot folder: {dname}')
+			raise ValueError(f'could not parse snapshot folder: {dname}')
 		return {'name': m.group(1),
 				'dt': datetime.strptime(m.group(2), "%Y-%m-%d_%H-%M-%S"),
 				'tags': m.group(3)}
@@ -1343,6 +1348,10 @@ class Bfg:
 		fss_by_key = defaultdict(set)
 		hosts_by_fs = defaultdict(set)
 		for row in all_rows:
+			if row.get('deleted'):
+				# a deleted copy is no evidence the content still exists on that fs; counting
+				# it would shift "newest shared" past the newest real pair, unprotecting it
+				continue
 			if row['fs_uuid'] == my_fs_uuid:
 				continue
 			fss_by_key[content_key(row)].add(row['fs_uuid'])
@@ -1570,6 +1579,38 @@ class Bfg:
 
 
 
+	def transfer_snapshot(s, SNAPSHOT, REMOTE_PARENT_DIR, PARENT=None, CLONESRCS=[]):
+		"""
+		Send one existing local snapshot into a directory on the other side, figuring out
+		the -p parent if not given. Unlike push, no origin subvolume is involved - useful
+		for re-establishing shared pairs on a pile and for distributing backups over hops.
+
+		:param SNAPSHOT: path of the existing local read-only snapshot to send
+		:param REMOTE_PARENT_DIR: directory on the other side to receive into
+			(e.g. /bac20/backups/jj/.bfg_snapshots/dev3)
+		:return: path of the snapshot created on the other side
+		"""
+		SNAPSHOT = Path(SNAPSHOT).absolute()
+		REMOTE_PARENT_DIR = Path(REMOTE_PARENT_DIR)
+
+		logbfg.debug(f'mkdir -p {REMOTE_PARENT_DIR}')
+		s._remote_cmd(['mkdir', '-p', str(REMOTE_PARENT_DIR)])
+
+		if PARENT is None:
+			my_uuid = s.get_subvol(s._local_cmd, SNAPSHOT).val['local_uuid']
+			PARENT = s.find_common_parent(str(SNAPSHOT), str(REMOTE_PARENT_DIR), my_uuid, ('local', 'remote')).val
+			if PARENT is not None:
+				PARENT = PARENT['abspath']
+
+		s.local_send(str(SNAPSHOT), ' | ' + s._sshstr + ' ' + s._sudo[0] + " btrfs receive " + str(REMOTE_PARENT_DIR), PARENT,
+					 CLONESRCS)
+
+		remote_snapshot = str(REMOTE_PARENT_DIR / SNAPSHOT.name)
+		_prerr(f'DONE, \n\ttransferred {SNAPSHOT} \n\tinto {remote_snapshot}\n.')
+		return Res(remote_snapshot)
+
+
+
 	"""
 
 	low-level operations
@@ -1654,6 +1695,21 @@ class Bfg:
 
 
 
+	def best_shared_parent(s, SUBVOL, REMOTE_SUBVOL, my_uuid=None, direction=('local', 'remote')):
+		"""
+		Read-only: the parent candidate that push/pull would pick for transferring SUBVOL
+		to REMOTE_SUBVOL (the first of parent_candidates), or None.
+		"""
+		if my_uuid is None:
+			my_uuid = s.get_subvol(s._local_cmd, SUBVOL).val['local_uuid']
+		candidates = list(s._parent_candidates(SUBVOL, REMOTE_SUBVOL, my_uuid, direction))
+		if len(candidates) > 0:
+			return Res(candidates[0])
+		else:
+			return Res(None)
+
+
+
 	def _add_abspath(s, subvol_record):
 		if subvol_record['machine'] == 'remote':
 			s._remote_add_abspath(subvol_record)
@@ -1715,11 +1771,13 @@ class Bfg:
 		my uuid is the local_uuid of the local rw subvolume that we're trying to transfer to the remote machine.
 		direction is either ('local', 'remote') or ('remote', 'local')
 
-		The walk is done by volwalker (v1) and/or volwalker2 (Prolog), controlled by the
-		BFG_VOLWALKER env var: 'v1', 'v2', or 'shadow' (the default: run both, use v1's
-		answer, and log disagreements - volwalker2 finding extra candidates is its
-		expected improvement, volwalker2 missing a v1 candidate is a red flag and the
-		input is dumped for analysis).
+		The walk is done by volwalker2 (Prolog) by default; the BFG_VOLWALKER env var
+		selects 'v1' (the legacy walker, kept one release as an escape hatch) or
+		'shadow' (run both, use v1's answer, and log disagreements - volwalker2 finding
+		extra candidates is its expected improvement, volwalker2 missing a v1 candidate
+		is a red flag and the input is dumped for analysis). Default flipped to 'v2'
+		2026-07-17 after a clean shadow period (zero mismatch dumps) and the randomized
+		differential/oracle suite in tests/test_common_parents.py.
 		"""
 
 		all_subvols2 = {}
@@ -1746,12 +1804,13 @@ class Bfg:
 
 		logging.debug(f'_parent_candidates2 all_subvols: {len(all_subvols)}')
 
-		mode = os.environ.get('BFG_VOLWALKER', 'shadow')
+		mode = os.environ.get('BFG_VOLWALKER', 'v2')
 		if mode not in ('v1', 'v2', 'shadow'):
 			raise Exception(f'BFG_VOLWALKER must be v1, v2 or shadow, not {mode!r}')
 		if mode != 'v1' and shutil.which('swipl') is None:
 			if mode == 'v2':
-				raise Exception('BFG_VOLWALKER=v2 but swipl is not installed')
+				raise Exception('volwalker2 (the default) needs swipl (SWI-Prolog); '
+								'install it, or set BFG_VOLWALKER=v1 for the legacy walker')
 			logbfg.debug('swipl not installed, skipping volwalker2 shadow run')
 			mode = 'v1'
 

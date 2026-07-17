@@ -26,7 +26,10 @@
 %
 % subvol(Ro, Fs, Uuid, ParentUuid, ReceivedUuid, Deleted)
 % Optional fields (ParentUuid, ReceivedUuid) are 'null' if missing/empty.
-% Deletion filtering is left to the Python caller (volwalker2.py).
+% Deleted subvols stay walkable (ancestry and content edges through them still
+% hold), but a deleted copy on the target is no evidence the content is still
+% there. Filtering deleted subvols out of the *candidates* is left to the
+% Python caller (volwalker2.py).
 
 :- use_module(library(http/json)).
 :- use_module(library(solution_sequences)).
@@ -68,9 +71,9 @@ assert_subvols([SubvolDict|Rest]) :-
 common_parent(SourceUuid, SourceFs, TargetFs, Uuid) :-
     ancestor(SourceUuid, AncestorUuid),
     capture(AncestorUuid, I),
-    % I's content made it to the target filesystem...
+    % I's content made it to the target filesystem (and still exists there)...
     once((same_content(I, RemoteUuid),
-          subvol(true, TargetFs, RemoteUuid, _, _, _))),
+          subvol(true, TargetFs, RemoteUuid, _, _, false))),
     % ...so any read-only subvol on the source side with that content is usable:
     same_content(I, Uuid),
     subvol(true, SourceFs, Uuid, _, _, _).

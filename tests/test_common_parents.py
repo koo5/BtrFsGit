@@ -113,7 +113,8 @@ def oracle(subvols, my_uuid, source_fs, target_fs):
     for a in ancestors:
         for i in captures(a):
             cls = content_class(i)
-            if not any(by[x]['fs_uuid'] == target_fs for x in cls):
+            # a deleted copy on the target is no evidence the content is still there
+            if not any(by[x]['fs_uuid'] == target_fs and not by[x]['deleted'] for x in cls):
                 continue
             result |= set(x for x in cls if by[x]['fs_uuid'] == source_fs)
     return set(x for x in result if not by[x]['deleted'])
@@ -197,12 +198,50 @@ def test_broken_ro_chain_is_of_no_use():
 
 @needs_swipl
 def test_deleted_candidates_are_filtered():
+    """a deleted snapshot must not be offered as a parent - by either walker."""
     subvols = [
         mk('S', 'fsA', ro=False),
         mk('P1', 'fsA', parent='S', deleted=True),
         mk('R1', 'fsB', received='P1'),
     ]
+    assert run_v1(subvols, 'S', 'fsA', 'fsB') == set()
     assert run_v2(subvols, 'S', 'fsB') == set()
+    assert oracle(subvols, 'S', 'fsA', 'fsB') == set()
+
+
+@needs_swipl
+def test_deleted_remote_copy_is_not_evidence():
+    """a deleted copy on the target proves nothing: without a live copy there, the
+    local snapshot must not be offered (the phantom-row scenario mark_deleted covers)."""
+    subvols = [
+        mk('S', 'fsA', ro=False),
+        mk('P1', 'fsA', parent='S'),
+        mk('R1', 'fsB', received='P1', deleted=True),
+    ]
+    assert run_v1(subvols, 'S', 'fsA', 'fsB') == set()
+    assert run_v2(subvols, 'S', 'fsB') == set()
+    assert oracle(subvols, 'S', 'fsA', 'fsB') == set()
+
+    # ...but a second, live copy keeps P1 usable
+    subvols.append(mk('R2', 'fsB', received='P1'))
+    assert run_v1(subvols, 'S', 'fsA', 'fsB') == {'P1'}
+    assert run_v2(subvols, 'S', 'fsB') == {'P1'}
+    assert oracle(subvols, 'S', 'fsA', 'fsB') == {'P1'}
+
+
+@needs_swipl
+def test_deleted_intermediate_stays_walkable():
+    """deletion must not break linkage: here the deleted P1 is the only bridge between
+    the live local candidate P2 and the live target copy R1 - P2 must still be found."""
+    subvols = [
+        mk('S', 'fsA', ro=False),
+        mk('P1', 'fsA', parent='S', deleted=True),
+        mk('P2', 'fsA', parent='P1'),
+        mk('R1', 'fsB', received='P1'),
+    ]
+    assert run_v1(subvols, 'S', 'fsA', 'fsB') == {'P2'}
+    assert run_v2(subvols, 'S', 'fsB') == {'P2'}
+    assert oracle(subvols, 'S', 'fsA', 'fsB') == {'P2'}
 
 
 """
@@ -244,6 +283,11 @@ def random_graph(rng):
             # dangling reference (the referenced subvol was pruned from the data)
             subvols.append(mk(uuid, base['fs_uuid'], parent='ghost-' + uuid,
                               ro=rng.random() < 0.8))
+    # mark some ro subvols deleted (rows flagged by db.mark_deleted between update_db
+    # runs): they must stay walkable but count neither as candidates nor as evidence
+    for x in subvols:
+        if x['ro'] and rng.random() < 0.15:
+            x['deleted'] = True
     my = rng.choice([x['local_uuid'] for x in subvols if not x['ro'] and x['fs_uuid'] == 'fsA'] or ['n0'])
     target_fs = rng.choice([f for f in fss if f != 'fsA'])
     return subvols, my, target_fs
@@ -257,8 +301,8 @@ def test_v2_matches_oracle_on_random_graphs():
     Note: v1 <= v2 is deliberately NOT asserted here: v1 has false positives of its
     own (it wanders down a received incremental's parent edge and through subvols
     whose origin was pruned from the data), which v2 correctly excludes. The targeted
-    tests above pin the v1-vs-v2 relationship on physically real scenarios; in
-    production, shadow mode logs any disagreement for investigation.
+    tests above pin the v1-vs-v2 relationship on physically real scenarios;
+    BFG_VOLWALKER=shadow runs both in production and logs any disagreement.
     """
     rng = random.Random(20260712)
     for trial in range(30):

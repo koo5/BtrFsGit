@@ -28,70 +28,72 @@ def mock_bfg():
 
 
 def test_calculate_default_snapshot_path(mock_bfg):
-    """Test the calculate_default_snapshot_path method."""
+    """Test the calculate_default_snapshot_path method.
+
+    The parent dir already ends in the subvol name (.bfg_snapshots/<subvol>); the
+    snapshot path appends _<timestamp>_<tag> to it, giving the flat name
+    .bfg_snapshots/<subvol>_<ts>_<tag> that parse_snapshot_name expects."""
     # Mock calculate_default_snapshot_parent_dir to return a known path
     mock_bfg.calculate_default_snapshot_parent_dir = MagicMock(
-        return_value=btrfsgit.Res("/mnt/test_fs/.bfg_snapshots")
+        return_value=btrfsgit.Res("/mnt/test_fs/.bfg_snapshots/data")
     )
-    
+
     # Test with default parameters
     with patch('time.strftime', return_value="2023-05-13_14-30-45"):
         result = mock_bfg.calculate_default_snapshot_path(
-            machine="local", 
-            SUBVOL="/mnt/test_fs/data", 
+            machine="local",
+            SUBVOL="/mnt/test_fs/data",
             TAG=None
         ).val
-        
+
         # Should return /mnt/test_fs/.bfg_snapshots/data_2023-05-13_14-30-45_from_<hostname>
         assert "/mnt/test_fs/.bfg_snapshots/data_2023-05-13_14-30-45_from_" in result
-    
+
     # Test with custom TAG
     with patch('time.strftime', return_value="2023-05-13_14-30-45"):
         result = mock_bfg.calculate_default_snapshot_path(
-            machine="local", 
-            SUBVOL="/mnt/test_fs/data", 
+            machine="local",
+            SUBVOL="/mnt/test_fs/data",
             TAG="test_tag"
         ).val
-        
+
         assert result == "/mnt/test_fs/.bfg_snapshots/data_2023-05-13_14-30-45_test_tag"
-    
+
     # Test with NAME_OVERRIDE
     result = mock_bfg.calculate_default_snapshot_path(
-        machine="local", 
-        SUBVOL="/mnt/test_fs/data", 
+        machine="local",
+        SUBVOL="/mnt/test_fs/data",
         TAG=None,
         NAME_OVERRIDE="custom_name"
     ).val
-    
+
     assert result == "/mnt/test_fs/.bfg_snapshots/data_custom_name"
 
 
 def test_calculate_default_snapshot_parent_dir(mock_bfg):
-    """Test the calculate_default_snapshot_parent_dir method."""
-    # Mock response for test -e command to simulate existing directory
-    mock_bfg._local_cmd.side_effect = lambda cmd, **kwargs: "exists" if cmd[0] == "test" else "cmd output"
-    
-    # Test with non-root subvolume (parent directory is part of the same filesystem)
-    with patch('btrfsgit.btrfsgit.Bfg._local_cmd') as mock_cmd:
-        # Configure mock to simulate cp --reflink success (same filesystem)
-        mock_cmd.return_value = "success"
-        mock_cmd.side_effect = None
-        
-        result = mock_bfg.calculate_default_snapshot_parent_dir("local", "/mnt/test_fs/data").val
-        
-        # Should return the parent directory + .bfg_snapshots
-        assert result == "/mnt/test_fs/.bfg_snapshots"
-    
-    # Test with root subvolume (parent directory is NOT part of the same filesystem)
-    with patch('btrfsgit.btrfsgit.Bfg._local_cmd') as mock_cmd:
-        # Configure mock to simulate cp --reflink failure (different filesystem)
-        mock_cmd.side_effect = lambda cmd, die_on_error=True, logger=None, capture_stderr=False: \
-            -1 if cmd[0] == "cp" else "success"
-        
-        result = mock_bfg.calculate_default_snapshot_parent_dir("local", "/mnt/test_fs").val
-        
-        # Should return the subvolume directory + .bfg_snapshots
-        assert result == "/mnt/test_fs/.bfg_snapshots"
+    """Test the calculate_default_snapshot_parent_dir method.
+
+    (mock_bfg replaces _local_cmd on the INSTANCE, so patching the class attribute
+    would be shadowed - configure the instance mock per case instead.)"""
+    # Test with non-root subvolume: cp --reflink into the parent succeeds, so the
+    # parent is the same filesystem and the snapshot dir goes next to the subvol
+    mock_bfg._local_cmd = MagicMock(return_value="success")
+
+    result = mock_bfg.calculate_default_snapshot_parent_dir("local", "/mnt/test_fs/data").val
+
+    # Should return the parent directory + .bfg_snapshots/<subvol name>
+    assert result == "/mnt/test_fs/.bfg_snapshots/data"
+
+    # Test with root subvolume: cp --reflink into the parent fails (filesystem
+    # boundary), so the snapshot dir goes INSIDE the subvol
+    mock_bfg._local_cmd = MagicMock(
+        side_effect=lambda cmd, die_on_error=True, logger=None, capture_stderr=False:
+            -1 if cmd[0] == "cp" else "success")
+
+    result = mock_bfg.calculate_default_snapshot_parent_dir("local", "/mnt/test_fs").val
+
+    # Should return a dir INSIDE the subvolume: .bfg_snapshots/<subvol name>
+    assert result == "/mnt/test_fs/.bfg_snapshots/test_fs"
 
 
 @patch('btrfsgit.btrfsgit.prompt', return_value=True)
@@ -255,29 +257,30 @@ def test_put_snapshots_into_buckets(mock_bfg):
         {"path": "/s10", "dt": now - timedelta(days=90)}  # Over 30 days
     ]
     
-    # Mock the bucket method to use specific bucket names for testing
-    with patch('datetime.datetime.now', return_value=now):
-        with patch.object(mock_bfg, 'bucket') as mock_bucket:
-            # Set up bucket return values
-            mock_bucket.side_effect = lambda dt, now: (
-                "under-1-min" if (now - dt).total_seconds() < 60 else
-                "minute" if (now - dt).total_seconds() < 3600 else
-                "hour" if (now - dt).total_seconds() < 86400 else
-                "day" if (now - dt).total_seconds() < 2592000 else
-                "month"
-            )
-            
-            # Call the method
-            buckets = mock_bfg.put_snapshots_into_buckets(snapshots)
-            
-            # Verify results
-            assert len(buckets) == 5  # Should have 5 buckets
-            assert len(buckets["under-1-min"]) == 2
-            assert len(buckets["minute"]) == 2
-            assert len(buckets["hour"]) == 2
-            assert len(buckets["day"]) == 2
-            assert len(buckets["month"]) == 2
-            
-            # Verify snapshots are sorted within buckets
-            assert buckets["minute"][0]["path"] == "/s4"  # Older one first
-            assert buckets["minute"][1]["path"] == "/s3"  # Newer one second
+    # Mock the bucket method to use coarse bucket names for testing (the method takes
+    # its own datetime.now() internally; the test dts are far enough from the bucket
+    # boundaries that the few ms of difference cannot change any bucket)
+    with patch.object(mock_bfg, 'bucket') as mock_bucket:
+        # Set up bucket return values
+        mock_bucket.side_effect = lambda dt, now: (
+            "under-1-min" if (now - dt).total_seconds() < 60 else
+            "minute" if (now - dt).total_seconds() < 3600 else
+            "hour" if (now - dt).total_seconds() < 86400 else
+            "day" if (now - dt).total_seconds() < 2592000 else
+            "month"
+        )
+
+        # Call the method
+        buckets = mock_bfg.put_snapshots_into_buckets(snapshots)
+
+        # Verify results
+        assert len(buckets) == 5  # Should have 5 buckets
+        assert len(buckets["under-1-min"]) == 2
+        assert len(buckets["minute"]) == 2
+        assert len(buckets["hour"]) == 2
+        assert len(buckets["day"]) == 2
+        assert len(buckets["month"]) == 2
+
+        # Verify snapshots are sorted within buckets
+        assert buckets["minute"][0]["path"] == "/s4"  # Older one first
+        assert buckets["minute"][1]["path"] == "/s3"  # Newer one second
