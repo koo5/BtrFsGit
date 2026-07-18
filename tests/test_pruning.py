@@ -710,8 +710,19 @@ def test_receive_lock_gc(mock_bfg_for_pruning):
 def test_receive_cmd_str(mock_bfg_for_pruning):
     bfg = mock_bfg_for_pruning
     assert bfg._receive_cmd_str('/bac/.bfg_snapshots/dev3', 'dev3_2026-06-22_08-15-49_from_jj') == \
+        'flock -n /bac/.bfg_snapshots/dev3/.bfg_receive_locks/.series ' \
         'flock /bac/.bfg_snapshots/dev3/.bfg_receive_locks/dev3_2026-06-22_08-15-49_from_jj ' \
         'btrfs receive /bac/.bfg_snapshots/dev3'
+
+
+def test_series_lock_is_dot_named(mock_bfg_for_pruning):
+    """the GC's `ls -1` must never list the series lock (dotfile), or it would try
+    to remove a file that in-flight transfers hold; snapshot names can't collide
+    with it either, since parse_snapshot_name requires a timestamped name."""
+    bfg = mock_bfg_for_pruning
+    lock = bfg._series_lock_path('/bac/.bfg_snapshots/dev3')
+    assert lock.parent == bfg._receive_locks_dir('/bac/.bfg_snapshots/dev3')
+    assert lock.name.startswith('.')
 
 
 def test_parse_size():

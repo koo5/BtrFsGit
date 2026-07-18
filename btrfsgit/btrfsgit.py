@@ -1792,6 +1792,19 @@ class Bfg:
 		return s._receive_locks_dir(target_dir) / snapshot_name
 
 
+	def _series_lock_path(s, target_dir):
+		"""
+		The in-flight-transfer marker for a series dir: every receive into target_dir
+		takes this exclusive flock non-blocking and holds it for the whole transfer,
+		so a second transfer into the same series fails instantly instead of queueing
+		behind the first only to duplicate its work (two concurrent full sends of the
+		same series is the expensive failure this prevents). Dot-named so the `ls -1`
+		in _gc_receive_locks never lists it: it is never unlinked - unlinking a lock
+		file a receiver holds would split the lock.
+		"""
+		return s._receive_locks_dir(target_dir) / '.series'
+
+
 	def _receive_cmd_str(s, target_dir, snapshot_name):
 		"""
 		The receive side of a send pipeline: btrfs receive wrapped in flock(1) on a
@@ -1799,9 +1812,13 @@ class Bfg:
 		the instant the receiving process dies (ssh cut, ENOSPC, OOM, ctrl-C), so
 		"is this partial's receive still alive?" becomes a kernel fact that
 		_sweep_aborted_receives can test exactly, with no process/age heuristics.
+		The outer flock -n on the series lock makes a concurrent transfer into the
+		same series dir fail immediately, see _series_lock_path.
 		"""
 		lock = s._receive_lock_path(target_dir, snapshot_name)
-		return 'flock ' + str(lock) + ' btrfs receive ' + str(target_dir)
+		series = s._series_lock_path(target_dir)
+		return ('flock -n ' + str(series) + ' flock ' + str(lock)
+				+ ' btrfs receive ' + str(target_dir))
 
 
 	def push(s, SUBVOL, SNAPSHOT, REMOTE_SUBVOL, PARENT=None, CLONESRCS=[]):
@@ -1932,12 +1949,14 @@ class Bfg:
 	def remote_send(s, REMOTE_SNAPSHOT, LOCAL_DIR, PARENT, CLONESRCS):
 		parents_args = s._parent_args(PARENT, CLONESRCS)
 
-		# receive under a per-snapshot flock, see _receive_cmd_str
+		# receive under the series in-flight marker and a per-snapshot flock,
+		# see _series_lock_path and _receive_cmd_str
 		s._local_cmd(['mkdir', '-p', str(s._receive_locks_dir(LOCAL_DIR))])
 		lock = s._receive_lock_path(LOCAL_DIR, Path(REMOTE_SNAPSHOT).name)
 
 		cmd1 = shlex.split(s._sshstr) + s._sudo + ['btrfs', 'send'] + parents_args + [REMOTE_SNAPSHOT]
-		cmd2 = s._sudo + ['flock', str(lock), 'btrfs', 'receive', str(LOCAL_DIR)]
+		cmd2 = s._sudo + ['flock', '-n', str(s._series_lock_path(LOCAL_DIR)),
+						  'flock', str(lock), 'btrfs', 'receive', str(LOCAL_DIR)]
 		logbtrfs.info(shlex.join(cmd1) + ' >>|>> ' + shlex.join(cmd2))
 		p1 = subprocess.Popen(
 			cmd1,
