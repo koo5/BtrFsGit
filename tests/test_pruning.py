@@ -612,11 +612,14 @@ def _abort_cmd_router(lock_exists, lock_held, deletes, rms, lockdir_listing=None
         if cmd[0] == 'flock' and cmd[3:6] == ['btrfs', 'subvolume', 'delete']:
             deletes.append(cmd[6])
             return ""
+        if cmd[0] == 'flock' and cmd[3] == 'rm':
+            # GC removes lock files only under flock -n on the file itself; a plain
+            # rm is a regression (would unlink a lock a just-started receive holds)
+            assert cmd[2] == cmd[4], cmd
+            rms.append(cmd[4])
+            return ""
         if cmd[0] == 'ls':
             return lockdir_listing if lockdir_listing is not None else -1
-        if cmd[0] == 'rm':
-            rms.append(cmd[1])
-            return ""
         return ""
     return route
 

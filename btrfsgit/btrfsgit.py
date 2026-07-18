@@ -1581,7 +1581,11 @@ class Bfg:
 		subvol is read-only (receive succeeded; a same-name retry would fail at
 		creation, so no receiver for that name can ever run again) or gone (received
 		and later pruned, or a swept partial). A lock file whose name matches a live
-		rw partial is load-bearing and kept.
+		rw partial is load-bearing and kept. Removal runs under flock -n on the file
+		itself: a receive that started after our subvols listing was taken (lock held,
+		subvol not created yet) makes the flock fail and its lock file survives -
+		unlinking a held lock file would split the lock and demote that receive to
+		'unproven' forever.
 		"""
 		if restrict_dir is not None:
 			restrict_dir = Path(restrict_dir).absolute()
@@ -1604,8 +1608,9 @@ class Bfg:
 				subvol = by_dir[d].get(name)
 				if subvol is not None and not subvol['ro']:
 					continue  # live partial (or in-flight receive) - its lock is the proof mechanism
-				logbfg.debug(f'GC receive lock {lockdir}/{name}')
-				s._local_cmd(['rm', str(lockdir / name)], die_on_error=False)
+				lock = lockdir / name
+				logbfg.debug(f'GC receive lock {lock}')
+				s._local_cmd(['flock', '-n', str(lock), 'rm', str(lock)], die_on_error=False)
 
 
 	def _report_aborted_receives(s, path, restrict_dir):
