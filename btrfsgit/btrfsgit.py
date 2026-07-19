@@ -91,6 +91,13 @@ def try_unlink(f):
 		pass
 
 
+# exit code of the receive pipeline when the target series' in-flight-transfer
+# marker (_series_lock_path) is already held: someone else is transferring this
+# series right now, so the send is redundant and gets skipped, not failed.
+# 75 = EX_TEMPFAIL, same "transient, try again later" convention backup.py uses.
+SERIES_BUSY_EXIT = 75
+
+
 def parse_size(size):
 	"""'500G', '1.5T', '100MiB', '2TB' or plain bytes -> int bytes (binary units)"""
 	if isinstance(size, (int, float)):
@@ -670,6 +677,8 @@ class Bfg:
 		:return: filesystem path of the snapshot created on the other machine
 		"""
 		remote_snapshot_path = s.commit_and_push(SUBVOL, REMOTE_SUBVOL, PARENT=PARENT).val
+		if remote_snapshot_path is None:
+			return Res(None)  # push skipped (series transfer already in flight)
 		s.checkout_remote(remote_snapshot_path, REMOTE_SUBVOL)
 		return Res(REMOTE_SUBVOL)
 
@@ -685,6 +694,8 @@ class Bfg:
 		"""
 		remote_snapshot_path = s.remote_commit(REMOTE_SUBVOL).val
 		local_snapshot_path = s.pull(remote_snapshot_path, SUBVOL).val
+		if local_snapshot_path is None:
+			return Res(None)  # pull skipped (series transfer already in flight)
 		s.checkout_local(local_snapshot_path, SUBVOL)
 		_prerr(f'DONE, \n\tpulled {remote_snapshot_path} \n\tinto {SUBVOL}\n.')
 		return Res(SUBVOL)
@@ -1813,11 +1824,14 @@ class Bfg:
 		"is this partial's receive still alive?" becomes a kernel fact that
 		_sweep_aborted_receives can test exactly, with no process/age heuristics.
 		The outer flock -n on the series lock makes a concurrent transfer into the
-		same series dir fail immediately, see _series_lock_path.
+		same series dir exit SERIES_BUSY_EXIT immediately (distinguishable from a
+		genuine receive failure), see _series_lock_path; push/transfer_snapshot
+		treat that as skip-and-continue, not as an error.
 		"""
 		lock = s._receive_lock_path(target_dir, snapshot_name)
 		series = s._series_lock_path(target_dir)
-		return ('flock -n ' + str(series) + ' flock ' + str(lock)
+		return ('flock -n -E ' + str(SERIES_BUSY_EXIT) + ' ' + str(series)
+				+ ' flock ' + str(lock)
 				+ ' btrfs receive ' + str(target_dir))
 
 
@@ -1837,9 +1851,16 @@ class Bfg:
 			if PARENT is not None:
 				PARENT = PARENT['abspath']
 
-		s.local_send(SNAPSHOT, ' | ' + s._sshstr + ' ' + s._sudo[0] + ' '
-					 + s._receive_cmd_str(snapshot_parent_dir, Path(SNAPSHOT).name), PARENT,
-					 CLONESRCS)
+		try:
+			s.local_send(SNAPSHOT, ' | ' + s._sshstr + ' ' + s._sudo[0] + ' '
+						 + s._receive_cmd_str(snapshot_parent_dir, Path(SNAPSHOT).name), PARENT,
+						 CLONESRCS)
+		except subprocess.CalledProcessError as e:
+			if e.returncode == SERIES_BUSY_EXIT:
+				logbfg.warning(f'skipping push of {SNAPSHOT}: a transfer into '
+							   f'{snapshot_parent_dir} is already in flight (series lock held)')
+				return Res(None)
+			raise
 		_prerr(f'DONE, \n\tpushed {SNAPSHOT} \n\tinto {snapshot_parent_dir}\n.')
 		return Res(str(snapshot_parent_dir) + '/' + Path(SNAPSHOT).parts[-1])
 
@@ -1855,7 +1876,8 @@ class Bfg:
 			if PARENT is not None:
 				PARENT = PARENT['abspath']
 
-		s.remote_send(REMOTE_SNAPSHOT, local_snapshot_parent_dir, PARENT, CLONESRCS)
+		if not s.remote_send(REMOTE_SNAPSHOT, local_snapshot_parent_dir, PARENT, CLONESRCS):
+			return Res(None)
 
 		local_snapshot = str(local_snapshot_parent_dir) + '/' + Path(REMOTE_SNAPSHOT).parts[-1]
 
@@ -1887,9 +1909,16 @@ class Bfg:
 			if PARENT is not None:
 				PARENT = PARENT['abspath']
 
-		s.local_send(str(SNAPSHOT), ' | ' + s._sshstr + ' ' + s._sudo[0] + ' '
-					 + s._receive_cmd_str(REMOTE_PARENT_DIR, SNAPSHOT.name), PARENT,
-					 CLONESRCS)
+		try:
+			s.local_send(str(SNAPSHOT), ' | ' + s._sshstr + ' ' + s._sudo[0] + ' '
+						 + s._receive_cmd_str(REMOTE_PARENT_DIR, SNAPSHOT.name), PARENT,
+						 CLONESRCS)
+		except subprocess.CalledProcessError as e:
+			if e.returncode == SERIES_BUSY_EXIT:
+				logbfg.warning(f'skipping transfer of {SNAPSHOT}: a transfer into '
+							   f'{REMOTE_PARENT_DIR} is already in flight (series lock held)')
+				return Res(None)
+			raise
 
 		remote_snapshot = str(REMOTE_PARENT_DIR / SNAPSHOT.name)
 		_prerr(f'DONE, \n\ttransferred {SNAPSHOT} \n\tinto {remote_snapshot}\n.')
@@ -1955,7 +1984,8 @@ class Bfg:
 		lock = s._receive_lock_path(LOCAL_DIR, Path(REMOTE_SNAPSHOT).name)
 
 		cmd1 = shlex.split(s._sshstr) + s._sudo + ['btrfs', 'send'] + parents_args + [REMOTE_SNAPSHOT]
-		cmd2 = s._sudo + ['flock', '-n', str(s._series_lock_path(LOCAL_DIR)),
+		cmd2 = s._sudo + ['flock', '-n', '-E', str(SERIES_BUSY_EXIT),
+						  str(s._series_lock_path(LOCAL_DIR)),
 						  'flock', str(lock), 'btrfs', 'receive', str(LOCAL_DIR)]
 		logbtrfs.info(shlex.join(cmd1) + ' >>|>> ' + shlex.join(cmd2))
 		p1 = subprocess.Popen(
@@ -1966,9 +1996,14 @@ class Bfg:
 			stdin=p1.stdout)
 		p1.stdout.close()  # https://www.titanwolf.org/Network/q/91c3c5dd-aa49-4bf4-911d-1bfe5ac304da/y
 		p2.communicate()
+		if p2.returncode == SERIES_BUSY_EXIT:
+			logbfg.warning(f'skipping pull of {REMOTE_SNAPSHOT}: a transfer into '
+						   f'{LOCAL_DIR} is already in flight (series lock held)')
+			return False
 		if p2.returncode != 0:
 			logbfg.error('exit code ' + str(p2.returncode))
 			exit(1)
+		return True
 
 
 

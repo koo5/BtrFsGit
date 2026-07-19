@@ -710,7 +710,7 @@ def test_receive_lock_gc(mock_bfg_for_pruning):
 def test_receive_cmd_str(mock_bfg_for_pruning):
     bfg = mock_bfg_for_pruning
     assert bfg._receive_cmd_str('/bac/.bfg_snapshots/dev3', 'dev3_2026-06-22_08-15-49_from_jj') == \
-        'flock -n /bac/.bfg_snapshots/dev3/.bfg_receive_locks/.series ' \
+        'flock -n -E 75 /bac/.bfg_snapshots/dev3/.bfg_receive_locks/.series ' \
         'flock /bac/.bfg_snapshots/dev3/.bfg_receive_locks/dev3_2026-06-22_08-15-49_from_jj ' \
         'btrfs receive /bac/.bfg_snapshots/dev3'
 
@@ -723,6 +723,58 @@ def test_series_lock_is_dot_named(mock_bfg_for_pruning):
     lock = bfg._series_lock_path('/bac/.bfg_snapshots/dev3')
     assert lock.parent == bfg._receive_locks_dir('/bac/.bfg_snapshots/dev3')
     assert lock.name.startswith('.')
+
+
+def test_push_skips_on_series_busy(mock_bfg_for_pruning):
+    """a series-lock conflict (exit 75) means someone else is transferring this
+    series: push must skip gracefully, not raise."""
+    bfg = mock_bfg_for_pruning
+    bfg.calculate_default_snapshot_parent_dir = MagicMock(
+        return_value=btrfsgit.Res(Path('/r/.bfg_snapshots/data')))
+    bfg.local_send = MagicMock(
+        side_effect=subprocess.CalledProcessError(btrfsgit.SERIES_BUSY_EXIT, 'send|receive'))
+
+    res = bfg.push('/fs/data', '/fs/.bfg_snapshots/data_2026-06-22_08-15-49_t',
+                   '/r/data', PARENT='/fs/.bfg_snapshots/data_2026-06-21_08-15-49_t')
+    assert res.val is None
+
+
+def test_push_reraises_on_real_receive_failure(mock_bfg_for_pruning):
+    bfg = mock_bfg_for_pruning
+    bfg.calculate_default_snapshot_parent_dir = MagicMock(
+        return_value=btrfsgit.Res(Path('/r/.bfg_snapshots/data')))
+    bfg.local_send = MagicMock(side_effect=subprocess.CalledProcessError(1, 'send|receive'))
+
+    with pytest.raises(subprocess.CalledProcessError):
+        bfg.push('/fs/data', '/fs/.bfg_snapshots/data_2026-06-22_08-15-49_t',
+                 '/r/data', PARENT='/fs/.bfg_snapshots/data_2026-06-21_08-15-49_t')
+
+
+def test_transfer_snapshot_skips_on_series_busy(mock_bfg_for_pruning):
+    bfg = mock_bfg_for_pruning
+    bfg.local_send = MagicMock(
+        side_effect=subprocess.CalledProcessError(btrfsgit.SERIES_BUSY_EXIT, 'send|receive'))
+
+    res = bfg.transfer_snapshot('/fs/.bfg_snapshots/data_2026-06-22_08-15-49_t',
+                                '/r/.bfg_snapshots/data',
+                                PARENT='/fs/.bfg_snapshots/data_2026-06-21_08-15-49_t')
+    assert res.val is None
+
+
+def test_remote_send_returns_false_on_series_busy(mock_bfg_for_pruning):
+    bfg = mock_bfg_for_pruning
+    bfg._sshstr = 'ssh fake@host'
+    bfg._sudo = ['sudo']
+    p1 = MagicMock()
+    p2 = MagicMock()
+    p2.returncode = btrfsgit.SERIES_BUSY_EXIT
+    with patch('btrfsgit.btrfsgit.subprocess.Popen', side_effect=[p1, p2]):
+        assert bfg.remote_send('/r/.bfg_snapshots/data_2026-06-22_08-15-49_t',
+                               '/bac/.bfg_snapshots/data', None, []) is False
+    p2.returncode = 0
+    with patch('btrfsgit.btrfsgit.subprocess.Popen', side_effect=[p1, p2]):
+        assert bfg.remote_send('/r/.bfg_snapshots/data_2026-06-22_08-15-49_t',
+                               '/bac/.bfg_snapshots/data', None, []) is True
 
 
 def test_parse_size():
