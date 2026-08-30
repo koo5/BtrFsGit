@@ -598,9 +598,12 @@ class Bfg:
 		fixme: in fact calculates also the base of the actual directory name now.
 
 		SUBVOL: your subvolume (for example /data).
-		Calculate the default snapshot parent dir. In the filesystem tree, it is on the same level as your subvolume, for example `/.bfg_snapshots.data`, if that is still the same filesystem.
+		Calculate the default snapshot parent dir. In the filesystem tree, it is on the same level as your subvolume, for example `/.bfg_snapshots/data` (snapshots then become `/.bfg_snapshots/data_<ts>_<tag>`), if that is still the same filesystem. For the root subvolume `/` the name `__root` is used: `/.bfg_snapshots/__root_<ts>_<tag>`.
 		"""
 		SUBVOL = Path(SUBVOL)
+		if SUBVOL.anchor == '//':
+			# POSIX allows pathlib to keep an exactly-double leading slash; on Linux it means '/'.
+			SUBVOL = Path('/', *SUBVOL.parts[1:])
 		parent = SUBVOL.parent
 
 		logger = logging.getLogger('calculate_default_snapshot_parent_dir')
@@ -634,8 +637,16 @@ class Bfg:
 					f'cp --reflink failed, this means that {parent} is not the same filesystem, going to make snapshot inside {SUBVOL} instead of {parent}')
 				snapshot_parent_dir = SUBVOL
 
-		r = str(Path(
-			str(snapshot_parent_dir) + '/.bfg_snapshots/' + Path(SUBVOL).parts[-1]).absolute())
+		# For the root subvolume, Path('/').parts[-1] is '/' itself. Concatenated as a string it
+		# collapsed the '.bfg_snapshots/' directory component into a bare name prefix, so root
+		# snapshots ended up as top-level entries of / (//.bfg_snapshots_<ts>_<tag>): invisible to
+		# the '.bfg_snapshots' in path.parts filters (never pruned, never usable as a send parent)
+		# and bind-mounted one by one by Flatpak sandboxes, which then pinned them after deletion.
+		# Name the root series '__root', matching how backup targets name the received root subvol.
+		name = SUBVOL.parts[-1]
+		if not name.strip('/'):
+			name = '__root'
+		r = str((Path(snapshot_parent_dir) / '.bfg_snapshots' / name).absolute())
 		logging.getLogger('utils').debug(f'calculate_default_snapshot_parent_dir: {SUBVOL=} -> {r=}')
 		return Res(r)
 
