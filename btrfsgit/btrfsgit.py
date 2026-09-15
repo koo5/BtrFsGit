@@ -2025,10 +2025,12 @@ class Bfg:
 		if len(candidates) != 0:
 			winner = candidates[0]
 			s._add_abspath(winner)
-			logbtrfs.debug(f'PICKED COMMON PARENT {winner["abspath"]}.')
+			logbfg.info(f'using shared parent ({winner["machine"]}, 1 of {len(candidates)} '
+						f'candidate(s)): {winner["abspath"]}')
 			logbtrfs.debug(f'details: {winner}.')
 			return Res(winner)
 		else:
+			logbfg.info(f'no shared parent between {subvolume} and {remote_subvolume}: full send')
 			return Res(None)
 
 
